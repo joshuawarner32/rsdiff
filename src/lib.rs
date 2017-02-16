@@ -9,7 +9,11 @@ pub fn load<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
     Ok(contents)
 }
 
-pub struct Index<'a>(Vec<&'a [u8]>);
+pub trait Index {
+    fn find_longest_prefix(&self, buffer: &[u8]) -> u64;
+}
+
+pub struct SuffixArray<'a>(Vec<&'a [u8]>);
 
 #[derive(Debug)]
 pub struct Diff {
@@ -29,21 +33,21 @@ fn longest_prefix(a: &[u8], b: &[u8]) -> usize {
     return i;
 }
 
-impl<'a> Index<'a> {
-    pub fn new(data: &'a[u8]) -> Index<'a> {
-        let mut index = Vec::new();
+impl<'a> SuffixArray<'a> {
+    pub fn new(data: &'a[u8]) -> SuffixArray<'a> {
+        let mut array = Vec::new();
 
         for i in 0..data.len() {
-            index.push(&data[i..]);
+            array.push(&data[i..]);
         }
 
         println!("Sorting");
 
-        index.sort();
+        array.sort();
 
         println!("Done sorting");
 
-        Index(index)
+        SuffixArray(array)
     }
 
     pub fn diff_to(&self, data: &'a [u8]) -> Diff {
@@ -68,6 +72,7 @@ impl<'a> Index<'a> {
                 }
                 Ordering::Equal
             });
+
             let len = match res {
                 Ok(index) => data.len() - i,
                 Err(index) => {
@@ -93,21 +98,12 @@ impl<'a> Index<'a> {
     }
 }
 
-struct Command {
-    bytewise_add_size: usize,
-    extra_append_size: usize,
-    oldfile_seek_offset: i64,
-}
-
-struct Patcher<CmdR, DiffR, ExtraR, OldRS, NewW> {
-    cmd: CmdR,
-    diff: DiffR,
-    extra: ExtraR,
-    old: OldRS,
-    new: NewW,
-}
-
-fn read_paired_bufs<F, R0: Read, R1: Read>(mut size: usize, mut r0: R0, mut r1: R1, mut f: F) -> io::Result<()>
+fn read_paired_bufs<F, R0: Read, R1: Read>(
+    mut size: u64,
+    mut r0: R0,
+    mut r1: R1,
+    mut f: F
+) -> io::Result<()>
     where F: FnMut(&mut [u8], &mut [u8]) -> io::Result<()>
 {
     let mut buf0 = [0u8; 1024];
@@ -117,13 +113,13 @@ fn read_paired_bufs<F, R0: Read, R1: Read>(mut size: usize, mut r0: R0, mut r1: 
     let mut base = 0;
 
     while size > 0 {
-        let avail = min(buf0.len(), size);
+        let avail = min(buf0.len() as u64, size) as usize;
         if p0 < avail {
             let s0 = r0.read(&mut buf0[p0..avail])?;
             p0 += s0;
         }
 
-        let avail = min(buf1.len(), size);
+        let avail = min(buf1.len() as u64, size) as usize;
         if p1 < avail {
             let s1 = r1.read(&mut buf1[p1..avail])?;
             p1 += s1;
@@ -131,7 +127,7 @@ fn read_paired_bufs<F, R0: Read, R1: Read>(mut size: usize, mut r0: R0, mut r1: 
 
         let pmin = min(p0, p1);
 
-        f(&mut buf0[base..pmin], &mut buf1[base..pmin]);
+        f(&mut buf0[base..pmin], &mut buf1[base..pmin])?;
 
         if p0 < p1 {
             for i in pmin..p1 {
@@ -144,13 +140,13 @@ fn read_paired_bufs<F, R0: Read, R1: Read>(mut size: usize, mut r0: R0, mut r1: 
         }
 
         base = 0;
-        size -= pmin;
+        size -= pmin as u64;
     }
 
     Ok(())
 }
 
-fn read_size_from<F, R: Read>(mut size: usize, mut r: R, mut f: F) -> io::Result<()>
+fn read_size_from<F, R: Read>(mut size: u64, mut r: R, mut f: F) -> io::Result<()>
     where F: FnMut(&mut [u8]) -> io::Result<()>
 {
     let mut buf = [0u8; 1024];
@@ -159,19 +155,48 @@ fn read_size_from<F, R: Read>(mut size: usize, mut r: R, mut f: F) -> io::Result
     let mut base = 0;
 
     while size > 0 {
-        let avail = min(buf.len(), size);
+        let avail = min(buf.len() as u64, size) as usize;
         if p < avail {
             let s = r.read(&mut buf[p..avail])?;
             p += s;
         }
 
-        f(&mut buf[base..p]);
+        f(&mut buf[base..p])?;
 
         base = 0;
-        size -= p;
+        size -= p as u64;
     }
 
     Ok(())
+}
+
+struct Command {
+    bytewise_add_size: u64,
+    extra_append_size: u64,
+    oldfile_seek_offset: i64,
+}
+
+struct Patcher<CmdR, DiffR, ExtraR, OldRS, NewW> {
+    cmd: CmdR,
+    diff: DiffR,
+    extra: ExtraR,
+    old: OldRS,
+    new: NewW,
+}
+
+fn offtin(buf: &[u8]) -> i64 {
+    let mut y = (buf[7] & 0x7F) as i64;
+
+    for i in 0..7 {
+        y = y * 256;
+        y += buf[6 - i] as i64;
+    }
+
+    if (buf[7] & 0x80) != 0 {
+        y = -y;
+    }
+
+    y
 }
 
 impl<CmdR, DiffR, ExtraR, OldRS, NewW> Patcher<CmdR, DiffR, ExtraR, OldRS, NewW>
@@ -182,6 +207,25 @@ impl<CmdR, DiffR, ExtraR, OldRS, NewW> Patcher<CmdR, DiffR, ExtraR, OldRS, NewW>
         OldRS: Read+Seek,
         NewW: Write
 {
+    fn read_command(&mut self) -> io::Result<Option<Command>> {
+        let mut buf = [0u8; 8*3];
+
+        let mut p = 0;
+        loop {
+            match self.cmd.read(&mut buf[p..]) {
+                Ok(0) => break,
+                Ok(size) => p += size,
+                Err(e) => return Err(e)
+            }
+        }
+
+        Ok(Some(Command {
+            bytewise_add_size: offtin(&buf[0..8]) as u64,
+            extra_append_size: offtin(&buf[8..16]) as u64,
+            oldfile_seek_offset: offtin(&buf[16..24]),
+        }))
+    }
+
     fn apply(&mut self, c: &Command) -> io::Result<()> {
         self.append_delta(c.bytewise_add_size)?;
         self.append_extra(c.extra_append_size)?;
@@ -189,7 +233,7 @@ impl<CmdR, DiffR, ExtraR, OldRS, NewW> Patcher<CmdR, DiffR, ExtraR, OldRS, NewW>
         Ok(())
     }
 
-    fn append_delta(&mut self, size: usize) -> io::Result<()> {
+    fn append_delta(&mut self, size: u64) -> io::Result<()> {
         let new = &mut self.new;
         read_paired_bufs(size, &mut self.old, &mut self.diff, |o, d| {
             for i in 0..o.len() {
@@ -199,7 +243,7 @@ impl<CmdR, DiffR, ExtraR, OldRS, NewW> Patcher<CmdR, DiffR, ExtraR, OldRS, NewW>
         })
     }
 
-    fn append_extra(&mut self, size: usize) -> io::Result<()> {
+    fn append_extra(&mut self, size: u64) -> io::Result<()> {
         let new = &mut self.new;
         read_size_from(size, &mut self.extra, |e| {
             new.write_all(&e)
@@ -209,4 +253,39 @@ impl<CmdR, DiffR, ExtraR, OldRS, NewW> Patcher<CmdR, DiffR, ExtraR, OldRS, NewW>
     fn seek_old(&mut self, size: i64) -> io::Result<()> {
         self.old.seek(io::SeekFrom::Current(size)).map(|_|())
     }
+}
+
+/// `patch_raw` reads the three patch data channels (`cmd`, `diff`, `extra`),
+/// and the `old` file stream (which must additionally be `Seek`), and writes
+/// the new file to the `new` stream.
+///
+/// This allows trying out different compression algorithms and wrapper formats,
+/// rather than accepting the defaults (bzip2, custom).
+pub fn patch_raw<CmdR, DiffR, ExtraR, OldRS, NewW>(
+    cmd: CmdR,
+    diff: DiffR,
+    extra: ExtraR,
+    old: OldRS,
+    new: NewW,
+) -> io::Result<()>
+    where
+        CmdR: Read,
+        DiffR: Read,
+        ExtraR: Read,
+        OldRS: Read+Seek,
+        NewW: Write
+{
+    let mut p = Patcher {
+        cmd: cmd,
+        diff: diff,
+        extra: extra,
+        old: old,
+        new: new,
+    };
+
+    while let Some(c) = p.read_command()? {
+        p.apply(&c)?;
+    }
+
+    Ok(())
 }
