@@ -3,89 +3,43 @@ use std::fs::File;
 use std::path::Path;
 use std::cmp::{min, max, Ordering};
 
-pub trait Index {
-    fn find_longest_prefix(&self, buffer: &[u8]) -> u64;
-}
+use byteorder::{LittleEndian, WriteBytesExt};
+use bzip2::write::BzEncoder;
+use bzip2;
+use sha1::{Sha1, Digest};
 
-pub struct SuffixArray<'a>(Vec<&'a [u8]>);
+use index::Index;
 
 #[derive(Debug)]
-pub struct Diff {
+pub struct DiffStat {
     matches: usize,
-    match_length_sum: usize
+    match_length_sum: u64
 }
 
-fn longest_prefix(a: &[u8], b: &[u8]) -> usize {
-    let mut i = 0;
-    let l = min(a.len(), b.len());
-    while i < l {
-        if a[i] != b[i] {
-            break;
-        }
-        i += 1;
-    }
-    return i;
-}
-
-impl<'a> SuffixArray<'a> {
-    pub fn new(data: &'a[u8]) -> SuffixArray<'a> {
-        let mut array = Vec::new();
-
-        for i in 0..data.len() {
-            array.push(&data[i..]);
-        }
-
-        println!("Sorting");
-
-        array.sort();
-
-        println!("Done sorting");
-
-        SuffixArray(array)
-    }
-
-    pub fn diff_to(&self, data: &'a [u8]) -> Diff {
+impl DiffStat {
+    pub fn from<I: Index>(index: I, new_data: &[u8]) -> DiffStat {
         let mut i = 0;
         let mut matches = 0;
         let mut match_length_sum = 0;
 
-        while i < data.len() {
-            let d = &data[i..];
-            let res = self.0.binary_search_by(|v| {
-                let mut i = 0;
-                let l = min(d.len(), v.len());
-                while i < l {
-                    if v[i] != d[i] {
-                        return if v[i] < d[i] {
-                            Ordering::Less
-                        } else {
-                            Ordering::Greater
-                        };
-                    }
-                    i += 1;
-                }
-                Ordering::Equal
-            });
+        while i < new_data.len() {
+            let d = &new_data[i..];
 
-            let len = match res {
-                Ok(index) => data.len() - i,
-                Err(index) => {
-                    max(
-                        if index < self.0.len() { longest_prefix(d, self.0[index]) } else { 0 },
-                        if index > 0 { longest_prefix(d, self.0[index - 1]) } else { 0 })
-                }
-            };
+            let range = index.find_longest_prefix(d);
+
+            let len = (range.end - range.start) as usize;
 
             if len > 8 {
                 matches += 1;
-                match_length_sum += len;
+                match_length_sum += len as u64;
             }
 
-
             i += max(1, len);
+
+            println!("{} / {} ({}%)", i, new_data.len(), i * 100 / new_data.len());
         }
 
-        Diff {
+        DiffStat {
             matches: matches,
             match_length_sum: match_length_sum,
         }
