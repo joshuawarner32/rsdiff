@@ -5,8 +5,7 @@ use std::fs::{self, File};
 use std::io::{self, Read};
 use std::fmt;
 
-use bsdiff::index::{Cache, StoredSuffixArray};
-use bsdiff::diff::DiffStat;
+use bsdiff::diff::{Cache, Index, DiffStat};
 
 fn load<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
     let mut contents = Vec::new();
@@ -38,7 +37,7 @@ impl<'a> fmt::Display for Hex<'a> {
     }
 }
 
-impl Cache for FileCache {
+impl<'a> Cache for &'a mut FileCache {
     type Read = File;
     type Write = File;
 
@@ -62,10 +61,10 @@ fn main() {
     let a = load("tests/avian_linux").unwrap();
     let b = load("tests/avian_pr_linux").unwrap();
 
-    let mut cache = FileCache::new(PathBuf::from(".cache");
+    let mut cache = FileCache::new(PathBuf::from(".cache"));
 
-    let index_a = StoredSuffixArray::from_cache_or_compute(&mut cache, a).unwrap();
-    let index_b = StoredSuffixArray::from_cache_or_compute(&mut cache, b).unwrap();
+    let index_a = Index::from_cache_or_compute(&mut cache, a).unwrap();
+    let index_b = Index::from_cache_or_compute(&mut cache, b).unwrap();
 
     let stat = DiffStat::from(&index_a, &index_b);
 
