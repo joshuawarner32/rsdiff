@@ -62,11 +62,12 @@ fn main() {
     let a = load("tests/avian_linux").unwrap();
     let b = load("tests/avian_pr_linux").unwrap();
 
-    let index = StoredSuffixArray::from_cache_or_compute(
-        FileCache::new(PathBuf::from(".cache")),
-        a).unwrap();
+    let mut cache = FileCache::new(PathBuf::from(".cache");
 
-    let stat = DiffStat::from(index, &b);
+    let index_a = StoredSuffixArray::from_cache_or_compute(&mut cache, a).unwrap();
+    let index_b = StoredSuffixArray::from_cache_or_compute(&mut cache, b).unwrap();
+
+    let stat = DiffStat::from(&index_a, &index_b);
 
     println!("{:?}", stat);
 }

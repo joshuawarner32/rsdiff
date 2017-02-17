@@ -17,26 +17,25 @@ pub struct DiffStat {
 }
 
 impl DiffStat {
-    pub fn from<I: Index>(index: I, new_data: &[u8]) -> DiffStat {
-        let mut i = 0;
+    pub fn from<FromI: Index, ToI: Index>(from: FromI, to: ToI) -> DiffStat {
         let mut matches = 0;
         let mut match_length_sum = 0;
 
-        while i < new_data.len() {
-            let d = &new_data[i..];
+        let mut it_a = from.sorted_ranges();
+        let mut it_b = to.sorted_ranges();
 
-            let range = index.find_longest_prefix(d);
+        let mut a = it_a.next();
+        let mut b = it_b.next();
 
-            let len = (range.end - range.start) as usize;
+        loop {
+            match (a, b) {
+                (Some(a), Some(b)) => {
 
-            if len > 8 {
-                matches += 1;
-                match_length_sum += len as u64;
+                }
+                _ => {
+                    break;
+                }
             }
-
-            i += max(1, len);
-
-            println!("{} / {} ({}%)", i, new_data.len(), i * 100 / new_data.len());
         }
 
         DiffStat {
