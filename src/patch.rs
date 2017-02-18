@@ -6,6 +6,8 @@ use std::cmp::{min, max, Ordering};
 use byteorder::{LittleEndian, ReadBytesExt};
 use bzip2::read::BzDecoder;
 
+use core::{read_offset, Command, CommandReader};
+
 fn read_paired_bufs<F, R0: Read, R1: Read>(
     mut size: u64,
     mut r0: R0,
@@ -90,62 +92,20 @@ fn read_size_from<F, R: Read>(mut size: u64, mut r: R, mut f: F) -> io::Result<(
     Ok(())
 }
 
-struct Command {
-    bytewise_add_size: u64,
-    extra_append_size: u64,
-    oldfile_seek_offset: i64,
-}
-
-struct Patcher<CmdR, DiffR, ExtraR, OldRS, NewW> {
-    cmd: CmdR,
+struct Patcher<DiffR, ExtraR, OldRS, NewW> {
     diff: DiffR,
     extra: ExtraR,
     old: OldRS,
     new: NewW,
 }
 
-fn offtin(buf: &[u8]) -> i64 {
-    let mut y = (buf[7] & 0x7F) as i64;
-
-    for i in 0..7 {
-        y = y * 256;
-        y += buf[6 - i] as i64;
-    }
-
-    if (buf[7] & 0x80) != 0 {
-        y = -y;
-    }
-
-    y
-}
-
-impl<CmdR, DiffR, ExtraR, OldRS, NewW> Patcher<CmdR, DiffR, ExtraR, OldRS, NewW>
+impl<DiffR, ExtraR, OldRS, NewW> Patcher<DiffR, ExtraR, OldRS, NewW>
     where
-        CmdR: Read,
         DiffR: Read,
         ExtraR: Read,
         OldRS: Read+Seek,
         NewW: Write
 {
-    fn read_command(&mut self) -> io::Result<Option<Command>> {
-        let mut buf = [0u8; 8*3];
-
-        let mut p = 0;
-        loop {
-            match self.cmd.read(&mut buf[p..]) {
-                Ok(0) => return Ok(None),
-                Ok(size) => p += size,
-                Err(e) => return Err(e)
-            }
-        }
-
-        Ok(Some(Command {
-            bytewise_add_size: offtin(&buf[0..8]) as u64,
-            extra_append_size: offtin(&buf[8..16]) as u64,
-            oldfile_seek_offset: offtin(&buf[16..24]),
-        }))
-    }
-
     fn apply(&mut self, c: &Command) -> io::Result<()> {
         self.append_delta(c.bytewise_add_size)?;
         self.append_extra(c.extra_append_size)?;
@@ -175,41 +135,6 @@ impl<CmdR, DiffR, ExtraR, OldRS, NewW> Patcher<CmdR, DiffR, ExtraR, OldRS, NewW>
     }
 }
 
-/// `apply_raw` reads the three patch data channels (`cmd`, `diff`, `extra`),
-/// and the `old` file stream (which must additionally be `Seek`), and writes
-/// the new file to the `new` stream.
-///
-/// This allows trying out different compression algorithms and wrapper formats,
-/// rather than accepting the defaults (bzip2, custom).
-pub fn apply_raw<CmdR, DiffR, ExtraR, OldRS, NewW>(
-    cmd: CmdR,
-    diff: DiffR,
-    extra: ExtraR,
-    old: OldRS,
-    new: NewW,
-) -> io::Result<()>
-    where
-        CmdR: Read,
-        DiffR: Read,
-        ExtraR: Read,
-        OldRS: Read+Seek,
-        NewW: Write
-{
-    let mut p = Patcher {
-        cmd: cmd,
-        diff: diff,
-        extra: extra,
-        old: old,
-        new: new,
-    };
-
-    while let Some(c) = p.read_command()? {
-        p.apply(&c)?;
-    }
-
-    Ok(())
-}
-
 pub fn apply<OldRS, NewW>(patch: &[u8], old: OldRS, new: NewW) -> io::Result<()>
     where
         OldRS: Read+Seek,
@@ -221,17 +146,25 @@ pub fn apply<OldRS, NewW>(patch: &[u8], old: OldRS, new: NewW) -> io::Result<()>
         return Err(io::Error::new(io::ErrorKind::InvalidData, "Bad header"));
     }
 
-    let commands_len = offtin(&header[8..8+8]) as usize;
-    let data_len = offtin(&header[16..8+16]) as usize;
-    let newsize = offtin(&header[24..8+24]) as usize;
+    let commands_len = read_offset(&header[8..8+8]) as usize;
+    let data_len = read_offset(&header[16..8+16]) as usize;
+    let newsize = read_offset(&header[24..8+24]) as usize;
 
     let (command_data, rest) = body.split_at(commands_len);
     let (diff_data, extra_data) = body.split_at(data_len);
 
-    let commands = BzDecoder::new(command_data);
+    let command_stream = BzDecoder::new(command_data);
+
+    let commands = CommandReader::new(command_stream);
 
     let diff = BzDecoder::new(diff_data);
     let extra = BzDecoder::new(extra_data);
 
     apply_raw(commands, diff, extra, old, new)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
 }
