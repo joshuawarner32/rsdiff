@@ -1,0 +1,7 @@
+[package]
+name = "reduce"
+version = "0.1.0"
+authors = ["Joshua Warner <joshuawarner32@gmail.com>"]
+
+[dependencies]
+rand = "0.3.15"
