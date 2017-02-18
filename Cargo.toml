@@ -1,6 +1,6 @@
 [package]
 authors = ["Joshua Warner <joshuawarner32@gmail.com>"]
-name = "bsdiff"
+name = "rsdiff"
 version = "0.1.0"
 
 [dependencies]

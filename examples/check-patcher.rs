@@ -1,11 +1,11 @@
-extern crate bsdiff;
+extern crate rsdiff;
 
 use std::path::{Path, PathBuf};
 use std::fs::{self, File};
 use std::io::{self, Read, Write, Cursor};
 use std::fmt;
 
-use bsdiff::patch;
+use rsdiff::patch;
 
 fn load<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
     let mut contents = Vec::new();
