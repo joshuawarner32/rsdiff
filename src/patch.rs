@@ -3,6 +3,9 @@ use std::fs::File;
 use std::path::Path;
 use std::cmp::{min, max, Ordering};
 
+use byteorder::{LittleEndian, ReadBytesExt};
+use bzip2::read::BzDecoder;
+
 fn read_paired_bufs<F, R0: Read, R1: Read>(
     mut size: u64,
     mut r0: R0,
@@ -18,16 +21,21 @@ fn read_paired_bufs<F, R0: Read, R1: Read>(
     let mut base = 0;
 
     while size > 0 {
+        // println!("base {}", base);
         let avail = min(buf0.len() as u64, size) as usize;
+        // println!("avail {} p0 {}", avail, p0);
         if p0 < avail {
             let s0 = r0.read(&mut buf0[p0..avail])?;
             p0 += s0;
+            // println!("s0 {} p0 {}", s0, p0);
         }
 
         let avail = min(buf1.len() as u64, size) as usize;
+        // println!("avail {} p1 {}", avail, p1);
         if p1 < avail {
             let s1 = r1.read(&mut buf1[p1..avail])?;
             p1 += s1;
+            // println!("s1 {} p1 {}", s1, p1);
         }
 
         let pmin = min(p0, p1);
@@ -44,8 +52,15 @@ fn read_paired_bufs<F, R0: Read, R1: Read>(
             }
         }
 
+        p0 -= pmin;
+        p1 -= pmin;
+
+        let processed = pmin - base;
+
+        // println!("size {} processed {}", size, processed);
+
+        size -= processed as u64;
         base = 0;
-        size -= pmin as u64;
     }
 
     Ok(())
@@ -118,7 +133,7 @@ impl<CmdR, DiffR, ExtraR, OldRS, NewW> Patcher<CmdR, DiffR, ExtraR, OldRS, NewW>
         let mut p = 0;
         loop {
             match self.cmd.read(&mut buf[p..]) {
-                Ok(0) => break,
+                Ok(0) => return Ok(None),
                 Ok(size) => p += size,
                 Err(e) => return Err(e)
             }
@@ -142,7 +157,7 @@ impl<CmdR, DiffR, ExtraR, OldRS, NewW> Patcher<CmdR, DiffR, ExtraR, OldRS, NewW>
         let new = &mut self.new;
         read_paired_bufs(size, &mut self.old, &mut self.diff, |o, d| {
             for i in 0..o.len() {
-                o[i] += d[i];
+                o[i] = o[i].wrapping_add(d[i]);
             }
             new.write_all(&o)
         })
@@ -195,11 +210,28 @@ pub fn apply_raw<CmdR, DiffR, ExtraR, OldRS, NewW>(
     Ok(())
 }
 
-pub fn apply<OldRS, NewW>(diff: &[u8], old: OldRS, new: NewW) -> io::Result<()>
+pub fn apply<OldRS, NewW>(patch: &[u8], old: OldRS, new: NewW) -> io::Result<()>
     where
         OldRS: Read+Seek,
         NewW: Write
 {
-    // TODO: read header, open streams, call apply_raw
-    Ok(())
+    let (header, body) = patch.split_at(32);
+
+    if &header[0..8] != b"BSDIFF40" {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "Bad header"));
+    }
+
+    let commands_len = offtin(&header[8..8+8]) as usize;
+    let data_len = offtin(&header[16..8+16]) as usize;
+    let newsize = offtin(&header[24..8+24]) as usize;
+
+    let (command_data, rest) = body.split_at(commands_len);
+    let (diff_data, extra_data) = body.split_at(data_len);
+
+    let commands = BzDecoder::new(command_data);
+
+    let diff = BzDecoder::new(diff_data);
+    let extra = BzDecoder::new(extra_data);
+
+    apply_raw(commands, diff, extra, old, new)
 }
