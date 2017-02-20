@@ -11,6 +11,8 @@ use bzip2::read::BzDecoder;
 use bzip2;
 use sha1::{Sha1, Digest};
 
+use core::{Command, CommandWriter, write_offset};
+
 pub trait Cache {
     type Read: io::Read;
     type Write: io::Write;
@@ -165,4 +167,45 @@ impl DiffStat {
             match_length_sum: match_length_sum,
         }
     }
+}
+
+pub fn generate_identity_patch(size: u64) -> Vec<u8> {
+    let mut cmds = BzEncoder::new(Vec::new(), bzip2::Compression::Best);
+    CommandWriter::new(&mut cmds).write(&Command {
+        bytewise_add_size: size,
+        extra_append_size: 0,
+        oldfile_seek_offset: 0,
+    });
+    let cmds = cmds.finish().unwrap();
+
+    let mut diff = BzEncoder::new(Vec::new(), bzip2::Compression::Best);
+    let buf = [0u8; 1024];
+    let mut written = 0;
+    while written < size {
+        let s = diff.write(&buf[..min(buf.len() as u64, (size - written)) as usize]).unwrap();
+        written += s as u64;
+    }
+    let diff = diff.finish().unwrap();
+
+    let mut extra = BzEncoder::new(Vec::new(), bzip2::Compression::Best);
+    let extra = extra.finish().unwrap();
+
+    let mut patch = Vec::new();
+
+    let mut header = [0u8; 32];
+
+    for (i, b) in b"BSDIFF40".iter().enumerate() {
+        header[i] = *b;
+    }
+
+    write_offset(&mut header[8..16], cmds.len() as i64);
+    write_offset(&mut header[16..24], diff.len() as i64);
+    write_offset(&mut header[24..32], size as i64);
+
+    patch.extend(&header);
+    patch.extend(&cmds);
+    patch.extend(&diff);
+    patch.extend(&extra);
+
+    patch
 }

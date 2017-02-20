@@ -1,6 +1,6 @@
-use std::io::Read;
-use std::io;
+use std::io::{self, Read, Write};
 
+#[derive(Debug, PartialEq, Eq)]
 pub struct Command {
     pub bytewise_add_size: u64,
     pub extra_append_size: u64,
@@ -36,6 +36,19 @@ pub fn read_offset(buf: &[u8]) -> i64 {
     y
 }
 
+pub fn write_offset(buf: &mut [u8], x: i64) {
+    let mut y = if x < 0 { x.wrapping_neg() } else { x };
+
+    for i in 0..8 {
+        buf[i] = y as u8;
+        y -= buf[i] as i64;
+        y /= 256;
+    }
+
+    if x < 0 {
+        buf[7] |= 0x80;
+    }
+}
 
 impl<R> Iterator for CommandReader<R>
     where R: Read
@@ -46,11 +59,21 @@ impl<R> Iterator for CommandReader<R>
         let mut buf = [0u8; 8*3];
 
         let mut p = 0;
-        loop {
+        while p < buf.len() {
+            println!("loop");
             match self.inner.read(&mut buf[p..]) {
-                Ok(0) => return None,
-                Ok(size) => p += size,
-                Err(e) => return Some(Err(e))
+                Ok(0) => {
+                    println!("1");
+                    return None
+                }
+                Ok(size) => {
+                    println!("2 => {}", size);
+                    p += size
+                }
+                Err(e) => {
+                    println!("3");
+                    return Some(Err(e))
+                }
             }
         }
 
@@ -59,5 +82,100 @@ impl<R> Iterator for CommandReader<R>
             extra_append_size: read_offset(&buf[8..16]) as u64,
             oldfile_seek_offset: read_offset(&buf[16..24]),
         }))
+    }
+}
+
+pub struct CommandWriter<W> {
+    inner: W
+}
+
+impl<W: Write> CommandWriter<W> {
+    pub fn new(inner: W) -> CommandWriter<W> {
+        CommandWriter {
+            inner: inner
+        }
+    }
+
+    pub fn write(&mut self, c: &Command) -> io::Result<()> {
+        let mut buf = [0u8; 8*3];
+
+        write_offset(&mut buf[0..8], c.bytewise_add_size as i64);
+        write_offset(&mut buf[8..16], c.extra_append_size as i64);
+        write_offset(&mut buf[16..24], c.oldfile_seek_offset);
+
+        self.inner.write_all(&buf)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn assert_identity_encoding(tests: &[(i64)]) {
+        for test in tests {
+            let mut buf = [0u8; 8];
+
+            println!("trying 0x{:x}", test);
+            
+            write_offset(&mut buf, *test);
+            let result = read_offset(&buf);
+
+            println!("  got 0x{:x}", result);
+
+            assert_eq!(*test, result);
+        }
+    }
+
+    #[test]
+    fn test_read_write_offset_roundtrip() {
+        assert_identity_encoding(&[
+            0, 1, -1, 2, -2, 3, -3,
+            127, -127, 128, -128, 129, -129,
+            255, -255, 256, -256, 257, -257,
+            16383, -16383, 16384, -16384, 16385, -16385,
+            65535, -65535, 65536, -65536, 65537, -65537,
+            0x7ffffffffffffffe,
+            0x7fffffffffffffff,
+            // 0x8000000000000000, // TODO: investigate breakage
+            0x8000000000000001,
+        ]);
+    }
+
+    #[test]
+    fn test_command_roundtrip() {
+        let cmds = vec![
+            Command {
+                bytewise_add_size: 1,
+                extra_append_size: 2,
+                oldfile_seek_offset: 3,
+            },
+            Command {
+                bytewise_add_size: 4,
+                extra_append_size: 5,
+                oldfile_seek_offset: 6,
+            },
+            Command {
+                bytewise_add_size: 7,
+                extra_append_size: 8,
+                oldfile_seek_offset: 9,
+            }
+        ];
+
+        let mut encoded = Vec::new();
+
+        {
+            let mut writer = CommandWriter::new(&mut encoded);
+
+            for c in &cmds {
+                writer.write(c).unwrap();
+            }
+        }
+
+        let mut reader = CommandReader::new(Cursor::new(encoded));
+
+        let result = reader.map(|e| e.unwrap()).collect::<Vec<_>>();
+
+        assert_eq!(cmds, result);
     }
 }

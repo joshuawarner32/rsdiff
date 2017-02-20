@@ -1,4 +1,4 @@
-use std::io::{self, Read, Write, Seek};
+use std::io::{self, Read, Write, Seek, Cursor};
 use std::fs::File;
 use std::path::Path;
 use std::cmp::{min, max, Ordering};
@@ -151,16 +151,28 @@ pub fn apply<OldRS, NewW>(patch: &[u8], old: OldRS, new: NewW) -> io::Result<()>
     let newsize = read_offset(&header[24..8+24]) as usize;
 
     let (command_data, rest) = body.split_at(commands_len);
-    let (diff_data, extra_data) = body.split_at(data_len);
+    let (diff_data, extra_data) = rest.split_at(data_len);
 
-    let command_stream = BzDecoder::new(command_data);
+    let command_stream = BzDecoder::new(Cursor::new(command_data));
 
     let commands = CommandReader::new(command_stream);
 
-    let diff = BzDecoder::new(diff_data);
-    let extra = BzDecoder::new(extra_data);
+    let diff = BzDecoder::new(Cursor::new(diff_data));
+    let extra = BzDecoder::new(Cursor::new(extra_data));
 
-    apply_raw(commands, diff, extra, old, new)
+    let mut patcher = Patcher {
+        diff: diff,
+        extra: extra,
+        old: old,
+        new: new
+    };
+
+    for cmd in commands {
+        println!("cmd {:?}", cmd);
+        patcher.apply(&(cmd?))?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

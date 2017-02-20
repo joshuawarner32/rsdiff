@@ -6,6 +6,9 @@ version = "0.1.0"
 [dependencies]
 byteorder = "1.0.0"
 bzip2 = "0.3.1"
+quickcheck = "0.4.1"
 sha1 = "0.2.0"
 zstd = "0.4.3"
-reduce = { path = "reduce" }
+
+[dependencies.reduce]
+path = "reduce"
