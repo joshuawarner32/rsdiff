@@ -158,7 +158,13 @@ impl Index {
 
         let start = self.offsets[match res {
             Ok(index) => index,
-            Err(index) => index,
+            Err(index) => {
+                if index >= self.offsets.len() {
+                    return 0..0;
+                } else {
+                    index
+                }
+            }
         }];
 
         let len = longest_prefix(buf, &self.data[start..]);
@@ -217,6 +223,16 @@ impl DiffStat {
     }
 }
 
+fn write_zeros<W: Write>(mut w: W, count: u64) -> io::Result<()> {
+    let buf = [0u8; 1024];
+    let mut written = 0;
+    while written < count {
+        let s = w.write(&buf[..min(buf.len() as u64, (count - written)) as usize])?;
+        written += s as u64;
+    }
+    Ok(())
+}
+
 pub fn generate_identity_patch(size: u64) -> Vec<u8> {
     let mut cmds = BzEncoder::new(Vec::new(), bzip2::Compression::Best);
     Command {
@@ -226,14 +242,9 @@ pub fn generate_identity_patch(size: u64) -> Vec<u8> {
     }.write_to(&mut cmds).unwrap();
     let cmds = cmds.finish().unwrap();
 
-    let mut diff = BzEncoder::new(Vec::new(), bzip2::Compression::Best);
-    let buf = [0u8; 1024];
-    let mut written = 0;
-    while written < size {
-        let s = diff.write(&buf[..min(buf.len() as u64, (size - written)) as usize]).unwrap();
-        written += s as u64;
-    }
-    let diff = diff.finish().unwrap();
+    let mut delta = BzEncoder::new(Vec::new(), bzip2::Compression::Best);
+    write_zeros(&mut delta, size).unwrap();
+    let delta = delta.finish().unwrap();
 
     let extra = BzEncoder::new(Vec::new(), bzip2::Compression::Best).finish().unwrap();
 
@@ -241,12 +252,12 @@ pub fn generate_identity_patch(size: u64) -> Vec<u8> {
 
     Header {
         compressed_commands_size: cmds.len() as u64,
-        compressed_delta_size: diff.len() as u64,
+        compressed_delta_size: delta.len() as u64,
         new_file_size: size as u64,
     }.write_to(&mut patch).unwrap();
 
     patch.extend(&cmds);
-    patch.extend(&diff);
+    patch.extend(&delta);
     patch.extend(&extra);
 
     patch
@@ -261,7 +272,7 @@ pub fn generate_idempotent_patch(desired_output: &[u8]) -> Vec<u8> {
     }.write_to(&mut cmds).unwrap();
     let cmds = cmds.finish().unwrap();
 
-    let diff = BzEncoder::new(Vec::new(), bzip2::Compression::Best).finish().unwrap();
+    let delta = BzEncoder::new(Vec::new(), bzip2::Compression::Best).finish().unwrap();
 
     let mut extra = BzEncoder::new(Vec::new(), bzip2::Compression::Best);
     extra.write_all(&desired_output).unwrap();
@@ -271,12 +282,12 @@ pub fn generate_idempotent_patch(desired_output: &[u8]) -> Vec<u8> {
 
     Header {
         compressed_commands_size: cmds.len() as u64,
-        compressed_delta_size: diff.len() as u64,
+        compressed_delta_size: delta.len() as u64,
         new_file_size: desired_output.len() as u64,
     }.write_to(&mut patch).unwrap();
 
     patch.extend(&cmds);
-    patch.extend(&diff);
+    patch.extend(&delta);
     patch.extend(&extra);
 
     patch
@@ -284,35 +295,69 @@ pub fn generate_idempotent_patch(desired_output: &[u8]) -> Vec<u8> {
 
 pub fn generate_simple_patch(from: &Index, to: &[u8]) -> Vec<u8> {
     let mut i = 0;
-
-    while i < to.len() {
-
-    }
+    let mut k = 0;
 
     let mut cmds = BzEncoder::new(Vec::new(), bzip2::Compression::Best);
+    let mut delta = BzEncoder::new(Vec::new(), bzip2::Compression::Best);
+    let mut extra = BzEncoder::new(Vec::new(), bzip2::Compression::Best);
+
+    let mut last_match = 0..0;
+    let mut last_match_i = 0;
+
+    while i < to.len() {
+        let m = from.longest_match(&to[i..]); 
+
+        // println!("longest match: {:?}", m);
+
+        if k % 1000 == 0 {
+            println!("{} / {} ({}%)", i, to.len(), i * 100 / to.len());
+        }
+        k += 1;
+
+        let m_len = m.len();
+
+        if m.len() > 8 {
+            // Write out the previous command (now that we know the endpoint of the seek
+            // and the extra size)
+            Command {
+                bytewise_add_size: last_match.len() as u64,
+                extra_append_size: (i - last_match_i - last_match.len()) as u64,
+                oldfile_seek_offset: (m.start as i64) - (last_match.end as i64),
+            }.write_to(&mut cmds).unwrap();
+            write_zeros(&mut delta, last_match.len() as u64).unwrap();
+            extra.write_all(&to[last_match_i + last_match.len()..i]);
+
+            last_match = m;
+            last_match_i = i;
+        }
+
+        i += max(8, m_len + 1) as usize;
+    }
+
+    // Write out the last command
     Command {
-        bytewise_add_size: 0,
-        extra_append_size: to.len() as u64,
+        bytewise_add_size: last_match.len() as u64,
+        extra_append_size: (to.len() - last_match_i - last_match.len()) as u64,
         oldfile_seek_offset: 0,
     }.write_to(&mut cmds).unwrap();
+    write_zeros(&mut delta, last_match.len() as u64).unwrap();
+    extra.write_all(&to[last_match_i + last_match.len()..]);
+
+
     let cmds = cmds.finish().unwrap();
-
-    let diff = BzEncoder::new(Vec::new(), bzip2::Compression::Best).finish().unwrap();
-
-    let mut extra = BzEncoder::new(Vec::new(), bzip2::Compression::Best);
-    extra.write_all(&to).unwrap();
+    let delta = delta.finish().unwrap();
     let extra = extra.finish().unwrap();
 
     let mut patch = Vec::new();
 
     Header {
         compressed_commands_size: cmds.len() as u64,
-        compressed_delta_size: diff.len() as u64,
+        compressed_delta_size: delta.len() as u64,
         new_file_size: to.len() as u64,
     }.write_to(&mut patch).unwrap();
 
     patch.extend(&cmds);
-    patch.extend(&diff);
+    patch.extend(&delta);
     patch.extend(&extra);
 
     patch

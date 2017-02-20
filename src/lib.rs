@@ -47,4 +47,19 @@ mod tests {
             assert_eq!(&buf[..], &new[..]);
         }
     }
+
+    #[test]
+    fn test_simple_patch() {
+        let buf = b"this is a test";
+        let buf2 = b"this is really a cool test";
+        let index = diff::Index::compute(buf.to_vec());
+        let patch = diff::generate_simple_patch(&index, &buf2[..]);
+        
+        let mut new = Vec::new();
+        let mut old = Cursor::new(buf);
+
+        patch::apply(&patch, &mut old, &mut new).unwrap();
+
+        assert_eq!(&buf2[..], &new[..]);
+    }
 }
