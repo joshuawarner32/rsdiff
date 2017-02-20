@@ -1,9 +1,6 @@
 use std::io::{self, Read, Write, Seek, Cursor};
-use std::fs::File;
-use std::path::Path;
-use std::cmp::{min, max, Ordering};
+use std::cmp::min;
 
-use byteorder::{LittleEndian, ReadBytesExt};
 use bzip2::read::BzDecoder;
 
 use core::{read_offset, Command, CommandReader};
@@ -133,6 +130,11 @@ impl<DiffR, ExtraR, OldRS, NewW> Patcher<DiffR, ExtraR, OldRS, NewW>
     fn seek_old(&mut self, size: i64) -> io::Result<()> {
         self.old.seek(io::SeekFrom::Current(size)).map(|_|())
     }
+
+    fn check_written_size(&self, _: u64) -> io::Result<()> {
+        // TODO: return an error if we haven't written the expected size to the output.
+        Ok(())
+    }
 }
 
 pub fn apply<OldRS, NewW>(patch: &[u8], old: OldRS, new: NewW) -> io::Result<()>
@@ -148,7 +150,7 @@ pub fn apply<OldRS, NewW>(patch: &[u8], old: OldRS, new: NewW) -> io::Result<()>
 
     let commands_len = read_offset(&header[8..8+8]) as usize;
     let data_len = read_offset(&header[16..8+16]) as usize;
-    let newsize = read_offset(&header[24..8+24]) as usize;
+    let newsize = read_offset(&header[24..8+24]) as u64;
 
     let (command_data, rest) = body.split_at(commands_len);
     let (diff_data, extra_data) = rest.split_at(data_len);
@@ -172,11 +174,11 @@ pub fn apply<OldRS, NewW>(patch: &[u8], old: OldRS, new: NewW) -> io::Result<()>
         patcher.apply(&(cmd?))?;
     }
 
+    patcher.check_written_size(newsize)?;
+
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
 }

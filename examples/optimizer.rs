@@ -19,7 +19,7 @@ struct FileCache {
 
 impl FileCache {
 	fn new(path: PathBuf) -> FileCache {
-		fs::create_dir_all(&path);
+		fs::create_dir_all(&path).unwrap();
 		FileCache {
 			path: path
 		}

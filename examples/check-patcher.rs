@@ -1,9 +1,8 @@
 extern crate rsdiff;
 
-use std::path::{Path, PathBuf};
-use std::fs::{self, File};
-use std::io::{self, Read, Write, Cursor};
-use std::fmt;
+use std::path::Path;
+use std::fs::File;
+use std::io::{self, Read, Cursor};
 
 use rsdiff::patch;
 

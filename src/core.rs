@@ -137,8 +137,8 @@ mod tests {
             65535, -65535, 65536, -65536, 65537, -65537,
             0x7ffffffffffffffe,
             0x7fffffffffffffff,
-            // 0x8000000000000000, // TODO: investigate breakage
-            0x8000000000000001,
+            // -0x8000000000000000, // TODO: investigate breakage
+            -0x7fffffffffffffff,
         ]);
     }
 
@@ -172,7 +172,7 @@ mod tests {
             }
         }
 
-        let mut reader = CommandReader::new(Cursor::new(encoded));
+        let reader = CommandReader::new(Cursor::new(encoded));
 
         let result = reader.map(|e| e.unwrap()).collect::<Vec<_>>();
 

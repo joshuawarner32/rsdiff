@@ -1,15 +1,11 @@
-use std::io::{self, Read, Write, Seek, BufRead, BufReader};
-use std::fs::File;
-use std::path::Path;
-use std::cmp::{min, max, Ordering};
-use std::ops::Range;
-use std::slice;
+use std::io::{self, Read, Write, BufReader};
+use std::cmp::{min, Ordering};
 
 use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
 use bzip2::write::BzEncoder;
-use bzip2::read::BzDecoder;
+// use bzip2::read::BzDecoder;
 use bzip2;
-use sha1::{Sha1, Digest};
+use sha1::Sha1;
 
 use core::{Command, CommandWriter, write_offset};
 
@@ -175,7 +171,7 @@ pub fn generate_identity_patch(size: u64) -> Vec<u8> {
         bytewise_add_size: size,
         extra_append_size: 0,
         oldfile_seek_offset: 0,
-    });
+    }).unwrap();
     let cmds = cmds.finish().unwrap();
 
     let mut diff = BzEncoder::new(Vec::new(), bzip2::Compression::Best);
@@ -187,8 +183,7 @@ pub fn generate_identity_patch(size: u64) -> Vec<u8> {
     }
     let diff = diff.finish().unwrap();
 
-    let mut extra = BzEncoder::new(Vec::new(), bzip2::Compression::Best);
-    let extra = extra.finish().unwrap();
+    let extra = BzEncoder::new(Vec::new(), bzip2::Compression::Best).finish().unwrap();
 
     let mut patch = Vec::new();
 
