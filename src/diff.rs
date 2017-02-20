@@ -1,5 +1,6 @@
 use std::io::{self, Read, Write, BufReader};
-use std::cmp::{min, Ordering};
+use std::cmp::{min, max, Ordering};
+use std::ops::Range;
 
 use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
 use bzip2::write::BzEncoder;
@@ -17,10 +18,9 @@ pub trait Cache {
     fn get_writer(&self, digest: &[u8; 20]) -> io::Result<Self::Write>;
 }
 
-const VERSION: u8 = 4;
+const VERSION: u8 = 5;
 
 pub struct Index {
-    data_sha1: [u8; 20],
     data: Vec<u8>,
     offsets: Vec<usize>,
 }
@@ -34,9 +34,9 @@ impl Index {
         sha1.update(&data);
         let digest = sha1.digest();
             
-        let mut offsets = Vec::new();
 
         if let Some(mut r) = cache.get(&digest.bytes())? {
+            let mut offsets = Vec::new();
 
             let mut file_hash = [0u8; 20];
             r.read_exact(&mut file_hash)?;
@@ -54,15 +54,26 @@ impl Index {
                 println!("Done");
 
                 return Ok(Index {
-                    data_sha1: digest.bytes(),
                     data: data,
                     offsets: offsets,
                 })
             }
         }
 
+        let res = Index::compute(data);
 
+        println!("Writing");
+
+        res.serialize_to(&digest.bytes(), cache.get_writer(&digest.bytes())?)?;
+
+        println!("Done");
+
+        Ok(res)
+    }
+
+    pub fn compute(data: Vec<u8>) -> Index {
         println!("Initializing");
+        let mut offsets = Vec::new();
 
         for i in 0..data.len() as usize {
             offsets.push(i);
@@ -73,26 +84,36 @@ impl Index {
         offsets.sort_by(|a, b| {
             let sa = &data[*a as usize..];
             let sb = &data[*b as usize..];
-            sa.cmp(sb)
+
+            let mut i = 0;
+            let l = min(sb.len(), sa.len());
+            while i < l {
+                if sa[i] != sb[i] {
+                    return if sa[i] < sb[i] {
+                        Ordering::Less
+                    } else {
+                        Ordering::Greater
+                    };
+                }
+                i += 1;
+            }
+            if sa.len() < sb.len() {
+                Ordering::Less
+            } else if sa.len() > sb.len() {
+                Ordering::Greater
+            } else {
+                Ordering::Equal
+            }
         });
 
-        let res = Index {
-            data_sha1: digest.bytes(),
+        Index {
             data: data,
             offsets: offsets,
-        };
-
-        println!("Writing");
-
-        res.serialize_to(cache.get_writer(&digest.bytes())?)?;
-
-        println!("Done");
-
-        Ok(res)
+        }
     }
 
-    fn serialize_to<W: Write>(&self, mut w: W) -> io::Result<()> {
-        w.write_all(&self.data_sha1)?;
+    fn serialize_to<W: Write>(&self, digest: &[u8; 20], mut w: W) -> io::Result<()> {
+        w.write_all(digest)?;
 
         // let mut w = BzEncoder::new(w, bzip2::Compression::Best);
 
@@ -101,6 +122,48 @@ impl Index {
         }
 
         Ok(())
+    }
+
+    fn longest_match(&self, buf: &[u8]) -> Range<usize> {
+        let res = self.offsets.binary_search_by(|&v| {
+            let mut i = 0;
+            let v = &self.data[v..];
+            // println!("looking for {:?} in {:?} ",
+            //    ::std::str::from_utf8(buf).unwrap(),
+            //    ::std::str::from_utf8(v).unwrap());
+            let l = min(buf.len(), v.len());
+            while i < l {
+                if v[i] != buf[i] {
+                    return if v[i] < buf[i] {
+                        // println!("returning Less");
+                        Ordering::Less
+                    } else {
+                        // println!("returning Greater");
+                        Ordering::Greater
+                    };
+                }
+                i += 1;
+            }
+            if v.len() < buf.len() {
+                // println!("returning Less");
+                Ordering::Less
+            } else if v.len() > buf.len() {
+                // println!("returning Greater");
+                Ordering::Greater
+            } else {
+                // println!("returning Equal");
+                Ordering::Equal
+            }
+        });
+
+        let start = self.offsets[match res {
+            Ok(index) => index,
+            Err(index) => index,
+        }];
+
+        let len = longest_prefix(buf, &self.data[start..]);
+
+        start .. start + len
     }
 }
 
@@ -123,45 +186,34 @@ pub struct DiffStat {
 }
 
 impl DiffStat {
-    pub fn from(from: &Index, to: &Index) -> DiffStat {
-        let mut match_count = 0;
-        let mut match_length_sum = 0;
-
-        let mut it_a = from.offsets.iter().map(|&o| &from.data[o..]).fuse();
-        let mut it_b = to.offsets.iter().map(|&o| &to.data[o..]).fuse();
+    pub fn from(from: &Index, to: &[u8]) -> DiffStat {
+        let mut stat = DiffStat {
+            match_count: 0,
+            match_length_sum: 0,
+        };
 
         let mut i = 0;
+        let mut k = 0;
 
-        if let (Some(mut a), Some(mut b)) = (it_a.next(), it_b.next()) {
-            loop {
-                println!("{}", i);
-                i += 1;
-                let prefix_len = longest_prefix(a, b);
+        while i < to.len() {
+            let m = from.longest_match(&to[i..]); 
 
-                if prefix_len > 8 {
-                    match_count += 1;
-                    match_length_sum += prefix_len as u64;
-                }
+            // println!("longest match: {:?}", m);
 
-                let (new_a, new_b) = match a.cmp(b) {
-                    Ordering::Less => (it_a.next(), Some(b)),
-                    Ordering::Greater => (Some(a), it_b.next()),
-                    Ordering::Equal => (it_a.next(), it_b.next()),
-                };
-
-                if !(new_a.is_some() || new_b.is_some()) {
-                    break;
-                }
-
-                a = new_a.unwrap_or(a);
-                b = new_b.unwrap_or(b);
+            if k % 1000 == 0 {
+                println!("{} / {} ({}%)", i, to.len(), i * 100 / to.len());
             }
+            k += 1;
+
+            if m.len() > 8 {
+                stat.match_count += 1;
+                stat.match_length_sum += m.len() as u64;
+            }
+
+            i += max(8, m.len()) as usize;
         }
 
-        DiffStat {
-            match_count: match_count,
-            match_length_sum: match_length_sum,
-        }
+        stat
     }
 }
 
@@ -228,4 +280,59 @@ pub fn generate_idempotent_patch(desired_output: &[u8]) -> Vec<u8> {
     patch.extend(&extra);
 
     patch
+}
+
+pub fn generate_simple_patch(from: &Index, to: &[u8]) -> Vec<u8> {
+    let mut i = 0;
+
+    while i < to.len() {
+
+    }
+
+    let mut cmds = BzEncoder::new(Vec::new(), bzip2::Compression::Best);
+    Command {
+        bytewise_add_size: 0,
+        extra_append_size: to.len() as u64,
+        oldfile_seek_offset: 0,
+    }.write_to(&mut cmds).unwrap();
+    let cmds = cmds.finish().unwrap();
+
+    let diff = BzEncoder::new(Vec::new(), bzip2::Compression::Best).finish().unwrap();
+
+    let mut extra = BzEncoder::new(Vec::new(), bzip2::Compression::Best);
+    extra.write_all(&to).unwrap();
+    let extra = extra.finish().unwrap();
+
+    let mut patch = Vec::new();
+
+    Header {
+        compressed_commands_size: cmds.len() as u64,
+        compressed_delta_size: diff.len() as u64,
+        new_file_size: to.len() as u64,
+    }.write_to(&mut patch).unwrap();
+
+    patch.extend(&cmds);
+    patch.extend(&diff);
+    patch.extend(&extra);
+
+    patch
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_index_longest_match() {
+        let index = Index::compute(Vec::from(&b"this is a test"[..]));
+
+        println!("index:");
+        for &offset in &index.offsets {
+            println!("  {}: {:?}", offset, ::std::str::from_utf8(&index.data[offset..]).unwrap());
+        }
+
+        let stat = DiffStat::from(&index, b"this is a test");
+        assert_eq!(stat.match_count, 1);
+        assert_eq!(stat.match_length_sum, b"this is a test".len() as u64);
+    }
 }

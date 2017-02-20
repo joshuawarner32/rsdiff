@@ -64,9 +64,8 @@ fn main() {
     let mut cache = FileCache::new(PathBuf::from(".cache"));
 
     let index_a = Index::from_cache_or_compute(&mut cache, a).unwrap();
-    let index_b = Index::from_cache_or_compute(&mut cache, b).unwrap();
 
-    let stat = DiffStat::from(&index_a, &index_b);
+    let stat = DiffStat::from(&index_a, &b);
 
     println!("{:?}", stat);
 }
