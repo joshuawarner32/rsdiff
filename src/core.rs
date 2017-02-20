@@ -1,5 +1,31 @@
 use std::io::{self, Read, Write};
 
+pub struct Header {
+    // NOTE: there's a non-stored field: magic (always b"BSDIFF40")
+
+    pub compressed_commands_size: u64,
+    pub compressed_delta_size: u64,
+
+    // NOTE: the compressed_extra_size is implicitly the size of the entire
+    // remainder of the patch file, after the compressed "delta" data.
+
+    pub new_file_size: u64,
+}
+
+impl Header {
+    pub fn read(buf: &[u8]) -> io::Result<Header> {
+        if &buf[0..8] != b"BSDIFF40" {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Bad header"));
+        }
+
+        Ok(Header {
+            compressed_commands_size: read_offset(&buf[8..8+8]) as u64,
+            compressed_delta_size: read_offset(&buf[16..8+16]) as u64,
+            new_file_size: read_offset(&buf[24..8+24]) as u64,
+        })
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct Command {
     pub bytewise_add_size: u64,

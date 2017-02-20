@@ -3,7 +3,11 @@ use std::cmp::min;
 
 use bzip2::read::BzDecoder;
 
-use core::{read_offset, Command, CommandReader};
+use core::{
+    Command,
+    CommandReader,
+    Header,
+};
 
 fn read_paired_bufs<F, R0: Read, R1: Read>(
     mut size: u64,
@@ -89,16 +93,16 @@ fn read_size_from<F, R: Read>(mut size: u64, mut r: R, mut f: F) -> io::Result<(
     Ok(())
 }
 
-struct Patcher<DiffR, ExtraR, OldRS, NewW> {
-    diff: DiffR,
+struct Patcher<DeltaR, ExtraR, OldRS, NewW> {
+    delta: DeltaR,
     extra: ExtraR,
     old: OldRS,
     new: NewW,
 }
 
-impl<DiffR, ExtraR, OldRS, NewW> Patcher<DiffR, ExtraR, OldRS, NewW>
+impl<DeltaR, ExtraR, OldRS, NewW> Patcher<DeltaR, ExtraR, OldRS, NewW>
     where
-        DiffR: Read,
+        DeltaR: Read,
         ExtraR: Read,
         OldRS: Read+Seek,
         NewW: Write
@@ -112,7 +116,7 @@ impl<DiffR, ExtraR, OldRS, NewW> Patcher<DiffR, ExtraR, OldRS, NewW>
 
     fn append_delta(&mut self, size: u64) -> io::Result<()> {
         let new = &mut self.new;
-        read_paired_bufs(size, &mut self.old, &mut self.diff, |o, d| {
+        read_paired_bufs(size, &mut self.old, &mut self.delta, |o, d| {
             for i in 0..o.len() {
                 o[i] = o[i].wrapping_add(d[i]);
             }
@@ -144,26 +148,20 @@ pub fn apply<OldRS, NewW>(patch: &[u8], old: OldRS, new: NewW) -> io::Result<()>
 {
     let (header, body) = patch.split_at(32);
 
-    if &header[0..8] != b"BSDIFF40" {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "Bad header"));
-    }
+    let header = Header::read(&header)?;
 
-    let commands_len = read_offset(&header[8..8+8]) as usize;
-    let data_len = read_offset(&header[16..8+16]) as usize;
-    let newsize = read_offset(&header[24..8+24]) as u64;
-
-    let (command_data, rest) = body.split_at(commands_len);
-    let (diff_data, extra_data) = rest.split_at(data_len);
+    let (command_data, rest) = body.split_at(header.compressed_commands_size as usize);
+    let (delta_data, extra_data) = rest.split_at(header.compressed_delta_size as usize);
 
     let command_stream = BzDecoder::new(Cursor::new(command_data));
 
     let commands = CommandReader::new(command_stream);
 
-    let diff = BzDecoder::new(Cursor::new(diff_data));
+    let delta = BzDecoder::new(Cursor::new(delta_data));
     let extra = BzDecoder::new(Cursor::new(extra_data));
 
     let mut patcher = Patcher {
-        diff: diff,
+        delta: delta,
         extra: extra,
         old: old,
         new: new
@@ -174,7 +172,7 @@ pub fn apply<OldRS, NewW>(patch: &[u8], old: OldRS, new: NewW) -> io::Result<()>
         patcher.apply(&(cmd?))?;
     }
 
-    patcher.check_written_size(newsize)?;
+    patcher.check_written_size(header.new_file_size)?;
 
     Ok(())
 }
