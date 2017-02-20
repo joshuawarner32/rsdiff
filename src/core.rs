@@ -15,7 +15,8 @@ pub struct Header {
 impl Header {
     pub fn read(buf: &[u8]) -> io::Result<Header> {
         if &buf[0..8] != b"BSDIFF40" {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "Bad header"));
+            return Err(io::Error::new(io::ErrorKind::InvalidData, format!("Bad header: {}",
+                unsafe { ::std::str::from_utf8_unchecked(&buf[0..8]) } )));
         }
 
         Ok(Header {
@@ -24,6 +25,17 @@ impl Header {
             new_file_size: read_offset(&buf[24..8+24]) as u64,
         })
     }
+
+    pub fn write_to<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        let mut buf = [0u8; 8*4];
+
+        buf[0..8].copy_from_slice(b"BSDIFF40");
+        write_offset(&mut buf[8..16], self.compressed_commands_size as i64);
+        write_offset(&mut buf[16..24], self.compressed_delta_size as i64);
+        write_offset(&mut buf[24..32], self.new_file_size as i64);
+
+        writer.write_all(&buf)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -31,6 +43,18 @@ pub struct Command {
     pub bytewise_add_size: u64,
     pub extra_append_size: u64,
     pub oldfile_seek_offset: i64,
+}
+
+impl Command {
+    pub fn write_to<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        let mut buf = [0u8; 8*3];
+
+        write_offset(&mut buf[0..8], self.bytewise_add_size as i64);
+        write_offset(&mut buf[8..16], self.extra_append_size as i64);
+        write_offset(&mut buf[16..24], self.oldfile_seek_offset);
+
+        writer.write_all(&buf)
+    }
 }
 
 pub struct CommandReader<R> {
@@ -111,28 +135,6 @@ impl<R> Iterator for CommandReader<R>
     }
 }
 
-pub struct CommandWriter<W> {
-    inner: W
-}
-
-impl<W: Write> CommandWriter<W> {
-    pub fn new(inner: W) -> CommandWriter<W> {
-        CommandWriter {
-            inner: inner
-        }
-    }
-
-    pub fn write(&mut self, c: &Command) -> io::Result<()> {
-        let mut buf = [0u8; 8*3];
-
-        write_offset(&mut buf[0..8], c.bytewise_add_size as i64);
-        write_offset(&mut buf[8..16], c.extra_append_size as i64);
-        write_offset(&mut buf[16..24], c.oldfile_seek_offset);
-
-        self.inner.write_all(&buf)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,10 +193,8 @@ mod tests {
         let mut encoded = Vec::new();
 
         {
-            let mut writer = CommandWriter::new(&mut encoded);
-
             for c in &cmds {
-                writer.write(c).unwrap();
+                c.write_to(&mut encoded).unwrap();
             }
         }
 

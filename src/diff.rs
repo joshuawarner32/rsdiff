@@ -7,7 +7,7 @@ use bzip2::write::BzEncoder;
 use bzip2;
 use sha1::Sha1;
 
-use core::{Command, CommandWriter, write_offset};
+use core::{Command, Header};
 
 pub trait Cache {
     type Read: io::Read;
@@ -167,11 +167,11 @@ impl DiffStat {
 
 pub fn generate_identity_patch(size: u64) -> Vec<u8> {
     let mut cmds = BzEncoder::new(Vec::new(), bzip2::Compression::Best);
-    CommandWriter::new(&mut cmds).write(&Command {
+    Command {
         bytewise_add_size: size,
         extra_append_size: 0,
         oldfile_seek_offset: 0,
-    }).unwrap();
+    }.write_to(&mut cmds).unwrap();
     let cmds = cmds.finish().unwrap();
 
     let mut diff = BzEncoder::new(Vec::new(), bzip2::Compression::Best);
@@ -187,17 +187,12 @@ pub fn generate_identity_patch(size: u64) -> Vec<u8> {
 
     let mut patch = Vec::new();
 
-    let mut header = [0u8; 32];
+    Header {
+        compressed_commands_size: cmds.len() as u64,
+        compressed_delta_size: diff.len() as u64,
+        new_file_size: size as u64,
+    }.write_to(&mut patch).unwrap();
 
-    for (i, b) in b"BSDIFF40".iter().enumerate() {
-        header[i] = *b;
-    }
-
-    write_offset(&mut header[8..16], cmds.len() as i64);
-    write_offset(&mut header[16..24], diff.len() as i64);
-    write_offset(&mut header[24..32], size as i64);
-
-    patch.extend(&header);
     patch.extend(&cmds);
     patch.extend(&diff);
     patch.extend(&extra);
@@ -207,11 +202,11 @@ pub fn generate_identity_patch(size: u64) -> Vec<u8> {
 
 pub fn generate_idempotent_patch(desired_output: &[u8]) -> Vec<u8> {
     let mut cmds = BzEncoder::new(Vec::new(), bzip2::Compression::Best);
-    CommandWriter::new(&mut cmds).write(&Command {
+    Command {
         bytewise_add_size: 0,
         extra_append_size: desired_output.len() as u64,
         oldfile_seek_offset: 0,
-    }).unwrap();
+    }.write_to(&mut cmds).unwrap();
     let cmds = cmds.finish().unwrap();
 
     let diff = BzEncoder::new(Vec::new(), bzip2::Compression::Best).finish().unwrap();
@@ -222,17 +217,12 @@ pub fn generate_idempotent_patch(desired_output: &[u8]) -> Vec<u8> {
 
     let mut patch = Vec::new();
 
-    let mut header = [0u8; 32];
+    Header {
+        compressed_commands_size: cmds.len() as u64,
+        compressed_delta_size: diff.len() as u64,
+        new_file_size: desired_output.len() as u64,
+    }.write_to(&mut patch).unwrap();
 
-    for (i, b) in b"BSDIFF40".iter().enumerate() {
-        header[i] = *b;
-    }
-
-    write_offset(&mut header[8..16], cmds.len() as i64);
-    write_offset(&mut header[16..24], diff.len() as i64);
-    write_offset(&mut header[24..32], desired_output.len() as i64);
-
-    patch.extend(&header);
     patch.extend(&cmds);
     patch.extend(&diff);
     patch.extend(&extra);
