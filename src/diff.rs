@@ -188,7 +188,31 @@ fn longest_prefix(a: &[u8], b: &[u8]) -> usize {
 #[derive(Debug)]
 pub struct DiffStat {
     match_count: usize,
-    match_length_sum: u64
+    match_length_sum: u64,
+    partial_match_count: usize,
+    partial_match_length_sum: u64,
+}
+
+fn partial_match_length(a: &[u8], b: &[u8]) -> usize {
+    let mut cur_matches = 0;
+    let mut last_good_i = 0;
+    let mut i = 0;
+
+    let len = min(a.len(), b.len());
+
+    while (i - cur_matches < 8) && i < len {
+        if cur_matches >= i / 2 {
+            last_good_i = i;
+        }
+
+        if a[i] == b[i] {
+            cur_matches += 1;
+        }
+
+        i += 1;
+    }
+
+    last_good_i
 }
 
 impl DiffStat {
@@ -196,13 +220,15 @@ impl DiffStat {
         let mut stat = DiffStat {
             match_count: 0,
             match_length_sum: 0,
+            partial_match_count: 0,
+            partial_match_length_sum: 0,
         };
 
         let mut i = 0;
         let mut k = 0;
 
         while i < to.len() {
-            let m = from.longest_match(&to[i..]); 
+            let m = from.longest_match(&to[i..]);
 
             // println!("longest match: {:?}", m);
 
@@ -212,8 +238,16 @@ impl DiffStat {
             k += 1;
 
             if m.len() > 8 {
+                let pml = partial_match_length(&from.data[m.start .. m.end], &to[i + m.len()..]);
+                let m = m.start .. m.end + pml;
+
                 stat.match_count += 1;
                 stat.match_length_sum += m.len() as u64;
+
+                stat.partial_match_length_sum += pml as u64;
+                if pml > 0 {
+                    stat.partial_match_count += 1;
+                }
             }
 
             i += max(8, m.len()) as usize;
@@ -362,6 +396,77 @@ pub fn generate_simple_patch(from: &Index, to: &[u8]) -> Vec<u8> {
 
     patch
 }
+
+pub fn generate_full_patch(from: &Index, to: &[u8]) -> Vec<u8> {
+    let mut i = 0;
+    let mut k = 0;
+
+    let mut cmds = BzEncoder::new(Vec::new(), bzip2::Compression::Best);
+    let mut delta = BzEncoder::new(Vec::new(), bzip2::Compression::Best);
+    let mut extra = BzEncoder::new(Vec::new(), bzip2::Compression::Best);
+
+    let mut last_match = 0..0;
+    let mut last_match_i = 0;
+
+    while i < to.len() {
+        let m = from.longest_match(&to[i..]);
+
+        // println!("longest match: {:?}", m);
+
+        if k % 1000 == 0 {
+            println!("{} / {} ({}%)", i, to.len(), i * 100 / to.len());
+        }
+        k += 1;
+
+        let m_len = m.len();
+
+        if m.len() > 8 {
+            // Write out the previous command (now that we know the endpoint of the seek
+            // and the extra size)
+            Command {
+                bytewise_add_size: last_match.len() as u64,
+                extra_append_size: (i - last_match_i - last_match.len()) as u64,
+                oldfile_seek_offset: (m.start as i64) - (last_match.end as i64),
+            }.write_to(&mut cmds).unwrap();
+            write_zeros(&mut delta, last_match.len() as u64).unwrap();
+            extra.write_all(&to[last_match_i + last_match.len()..i]);
+
+            last_match = m;
+            last_match_i = i;
+        }
+
+        i += max(8, m_len + 1) as usize;
+    }
+
+    // Write out the last command
+    Command {
+        bytewise_add_size: last_match.len() as u64,
+        extra_append_size: (to.len() - last_match_i - last_match.len()) as u64,
+        oldfile_seek_offset: 0,
+    }.write_to(&mut cmds).unwrap();
+    write_zeros(&mut delta, last_match.len() as u64).unwrap();
+    extra.write_all(&to[last_match_i + last_match.len()..]);
+
+
+    let cmds = cmds.finish().unwrap();
+    let delta = delta.finish().unwrap();
+    let extra = extra.finish().unwrap();
+
+    let mut patch = Vec::new();
+
+    Header {
+        compressed_commands_size: cmds.len() as u64,
+        compressed_delta_size: delta.len() as u64,
+        new_file_size: to.len() as u64,
+    }.write_to(&mut patch).unwrap();
+
+    patch.extend(&cmds);
+    patch.extend(&delta);
+    patch.extend(&extra);
+
+    patch
+}
+
 
 #[cfg(test)]
 mod tests {
