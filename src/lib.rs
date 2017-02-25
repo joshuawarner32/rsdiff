@@ -8,6 +8,8 @@ mod core;
 pub mod patch;
 pub mod diff;
 
+pub use core::Header;
+
 #[cfg(test)]
 mod tests {
     use super::*;

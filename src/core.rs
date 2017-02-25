@@ -1,5 +1,6 @@
 use std::io::{self, Read, Write};
 
+#[derive(Debug)]
 pub struct Header {
     // NOTE: there's a non-stored field: magic (always b"BSDIFF40")
 
