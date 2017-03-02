@@ -215,6 +215,27 @@ fn partial_match_length(a: &[u8], b: &[u8]) -> usize {
     last_good_i
 }
 
+fn reverse_partial_match_length(a: &[u8], b: &[u8]) -> usize {
+    let mut cur_matches = 0;
+    let mut last_good_i = 0;
+    let mut i = 0;
+
+    let len = min(a.len(), b.len());
+
+    while (i - cur_matches < 8) && i < len {
+        if cur_matches >= i / 2 {
+            last_good_i = i;
+        }
+
+        if a[len - i - 1] == b[len - i - 1] {
+            cur_matches += 1;
+        }
+
+        i += 1;
+    }
+
+    last_good_i
+}
 impl DiffStat {
     pub fn from(from: &Index, to: &[u8]) -> DiffStat {
         let mut stat = DiffStat {
@@ -237,20 +258,25 @@ impl DiffStat {
             }
             k += 1;
 
-            if m.len() > 8 {
-                let pml = partial_match_length(&from.data[m.start .. m.end], &to[i + m.len()..]);
-                let m = m.start .. m.end + pml;
+            let pml = if m.len() > 8 {
+                let pml = partial_match_length(&from.data[m.end..], &to[i + m.len()..]);
+                let rpml = reverse_partial_match_length(&from.data[..m.start], &to[..i]);
+                // let m = m.start - rpml .. m.end + pml;
 
                 stat.match_count += 1;
                 stat.match_length_sum += m.len() as u64;
 
-                stat.partial_match_length_sum += pml as u64;
-                if pml > 0 {
+                stat.partial_match_length_sum += (pml + rpml) as u64;
+                if pml + rpml > 0 {
                     stat.partial_match_count += 1;
                 }
-            }
 
-            i += max(8, m.len()) as usize;
+                pml
+            } else {
+                0
+            };
+
+            i += max(8, m.len() + pml) as usize;
         }
 
         stat
