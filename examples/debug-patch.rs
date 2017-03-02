@@ -2,7 +2,7 @@ extern crate rsdiff;
 
 use std::path::Path;
 use std::fs::File;
-use std::io::{self, Read, Cursor};
+use std::io::{self, Read};
 use std::env;
 
 use rsdiff::Header;
