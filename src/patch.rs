@@ -1,7 +1,7 @@
 use std::io::{self, Read, Write, Seek, Cursor};
 use std::cmp::min;
 
-use bzip2::read::BzDecoder;
+use bzip2::bufread::BzDecoder;
 
 use core::{
     Command,
