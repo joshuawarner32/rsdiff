@@ -75,6 +75,7 @@ mod tests {
         let mut new = Vec::new();
         let mut old = Cursor::new(buf);
 
+        println!("done making patch");
         patch::apply(&patch, &mut old, &mut new).unwrap();
 
         assert_eq!(&buf2[..], &new[..]);

@@ -1,7 +1,7 @@
 use std::io::{self, Read, Write, BufReader};
 use std::cmp::{min, max, Ordering};
 use std::ops::Range;
-use std::mem;
+use std::{mem, str};
 
 use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
 use bzip2::write::BzEncoder;
@@ -157,18 +157,37 @@ impl Index {
             }
         });
 
-        let start = self.offsets[match res {
-            Ok(index) => index,
+        println!("found [{}] at {:?}", unsafe { str::from_utf8_unchecked(buf) }, res);
+
+        let (start, len) = match res {
+            Ok(index) => {
+                let start = self.offsets[index];
+                let len = longest_prefix(buf, &self.data[start..]);
+                (start, len)
+            }
             Err(index) => {
-                if index >= self.offsets.len() {
-                    return 0..0;
+                let lower_start = if index > 0 {
+                    self.offsets[index - 1]
                 } else {
-                    index
+                    self.data.len()
+                };
+
+                let upper_start = if index < self.offsets.len() {
+                    self.offsets[index]
+                } else {
+                    self.data.len()
+                };
+
+                let lower_len = longest_prefix(buf, &self.data[lower_start..]);
+                let upper_len = longest_prefix(buf, &self.data[upper_start..]);
+
+                if lower_len > upper_len {
+                    (lower_start, lower_len)
+                } else {
+                    (upper_start, upper_len)
                 }
             }
-        }];
-
-        let len = longest_prefix(buf, &self.data[start..]);
+        };
 
         start .. start + len
     }
@@ -275,7 +294,7 @@ impl Delta {
     }
 
     fn upper_delta_range(&self) -> Range<usize> {
-        self.old_offset + self.lower_delta_len + self.mid_exact_len .. self.len()
+        self.old_offset + self.lower_delta_len + self.mid_exact_len .. self.old_offset + self.len()
     }
 
     fn len(&self) -> usize {
@@ -316,7 +335,9 @@ impl<'a> Iterator for MatchIter<'a> {
         while self.i < self.new.len() {
             let m = self.old.longest_match(&self.new[self.i..]);
 
-            if m.len() > 8 {
+            println!("i {} match {:?}", self.i, m);
+
+            if m.len() >= 8 {
                 let pml = partial_match_length(
                     &self.old.data[m.end..],
                     &self.new[self.i + m.len()..]);
@@ -330,7 +351,7 @@ impl<'a> Iterator for MatchIter<'a> {
                 let last_end = self.last_end;
                 self.last_end = self.i + m.len() + pml;
 
-                self.i += max(8, m.len() + pml) as usize;
+                self.i += max(1, m.len() + pml) as usize;
 
                 let last_delta = mem::replace(&mut self.last_delta, Delta {
                     old_offset: m.start - rpml,
@@ -346,7 +367,7 @@ impl<'a> Iterator for MatchIter<'a> {
                     });
                 }
             } else {
-                self.i += max(8, m.len()) as usize;
+                self.i += max(1, m.len()) as usize;
             }
         }
 
@@ -509,7 +530,7 @@ pub fn generate_full_patch(old: &Index, new: &[u8]) -> Vec<u8> {
 
         w.write_delta(
             &old.data[mm.upper_delta_range()], 
-            &new[i + mm.lower_delta_len + mm.mid_exact_len .. mm.len()]);
+            &new[i + mm.lower_delta_len + mm.mid_exact_len .. i + mm.len()]);
 
         let extra_begin = i + mm.len();
         let extra_end = extra_begin + m.unmatched_suffix;
@@ -527,13 +548,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_index_longest_match() {
+    fn test_index_simple_match() {
         let index = Index::compute(Vec::from(&b"this is a test"[..]));
-
-        println!("index:");
-        for &offset in &index.offsets {
-            println!("  {}: {:?}", offset, ::std::str::from_utf8(&index.data[offset..]).unwrap());
-        }
 
         let matches = MatchIter::from(&index, b"this is a test").collect::<Vec<_>>();
 
@@ -545,6 +561,45 @@ mod tests {
                     mid_exact_len: 14,
                     upper_delta_len: 0,
                 }, unmatched_suffix: 0
+            }
+        ]);
+    }
+
+    #[test]
+    fn test_index_slightly_less_simple_match() {
+        let index = Index::compute(Vec::from(&b"this is a test 12345678 test"[..]));
+
+        println!("index:");
+        for (i, &offset) in index.offsets.iter().enumerate() {
+            println!("  {}:  {}: {:?}", i, offset, ::std::str::from_utf8(&index.data[offset..]).unwrap());
+        }
+
+        println!("");
+
+        let matches = MatchIter::from(&index,
+            b"this is really a cool uftu 12345678 uftu")
+        .collect::<Vec<_>>();
+
+        assert_eq!(matches, vec![
+            Match {
+                matched: Delta {
+                    old_offset: 0,
+                    lower_delta_len: 0,
+                    mid_exact_len: 8,
+                    upper_delta_len: 1
+                },
+                unmatched_suffix: 16
+            },
+            // NOTE: the following definitely seems sub-optimal.
+            // We can probably do a better job here.
+            Match {
+                matched: Delta {
+                    old_offset: 13,
+                    lower_delta_len: 1,
+                    mid_exact_len: 10,
+                    upper_delta_len: 1
+                },
+                unmatched_suffix: 3
             }
         ]);
     }
