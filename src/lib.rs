@@ -14,6 +14,7 @@ pub use core::Header;
 mod tests {
     use super::*;
     use std::io::Cursor;
+    use std::str;
 
     #[test]
     fn test_identity_patch() {
@@ -78,6 +79,6 @@ mod tests {
         println!("done making patch");
         patch::apply(&patch, &mut old, &mut new).unwrap();
 
-        assert_eq!(&buf2[..], &new[..]);
+        assert_eq!(str::from_utf8(buf2).unwrap(), str::from_utf8(&new).unwrap());
     }
 }

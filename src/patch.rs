@@ -24,21 +24,29 @@ fn read_paired_bufs<F, R0: Read, R1: Read>(
     let mut base = 0;
 
     while size > 0 {
-        // println!("base {}", base);
+        println!("base {} size {}", base, size);
         let avail = min(buf0.len() as u64, size) as usize;
-        // println!("avail {} p0 {}", avail, p0);
+        println!("avail {} p0 {}", avail, p0);
         if p0 < avail {
             let s0 = r0.read(&mut buf0[p0..avail])?;
             p0 += s0;
-            // println!("s0 {} p0 {}", s0, p0);
+            if s0 == 0 {
+                println!("got s0 0");
+                break;
+            }
+            println!("s0 {} p0 {}", s0, p0);
         }
 
         let avail = min(buf1.len() as u64, size) as usize;
-        // println!("avail {} p1 {}", avail, p1);
+        println!("avail {} p1 {}", avail, p1);
         if p1 < avail {
             let s1 = r1.read(&mut buf1[p1..avail])?;
             p1 += s1;
-            // println!("s1 {} p1 {}", s1, p1);
+            if s1 == 0 {
+                println!("got s1 0");
+                break;
+            }
+            println!("s1 {} p1 {}", s1, p1);
         }
 
         let pmin = min(p0, p1);
@@ -60,7 +68,7 @@ fn read_paired_bufs<F, R0: Read, R1: Read>(
 
         let processed = pmin - base;
 
-        // println!("size {} processed {}", size, processed);
+        println!("size {} processed {}", size, processed);
 
         size -= processed as u64;
         base = 0;

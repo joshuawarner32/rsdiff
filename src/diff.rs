@@ -392,6 +392,7 @@ fn write_zeros<W: Write>(mut w: W, count: u64) -> io::Result<()> {
     while written < count {
         let s = w.write(&buf[..min(buf.len() as u64, (count - written)) as usize])?;
         written += s as u64;
+        println!("write zero {}", s);
     }
     Ok(())
 }
@@ -401,11 +402,13 @@ fn write_delta<W: Write>(mut w: W, old: &[u8], new: &[u8]) -> io::Result<()> {
     let mut buf = [0u8; 1024];
     let mut written = 0;
     while written < old.len() {
-        for i in written .. written + min(1024, old.len() - written) {
-            buf[i] = new[i].wrapping_sub(old[i]);
+        let to_write = min(buf.len(), old.len() - written);
+        for i in  0..to_write {
+            buf[i] = new[i + written].wrapping_sub(old[i + written]);
         }
 
-        let s = w.write(&buf[..min(buf.len(), (old.len() - written)) as usize])?;
+        let s = w.write(&buf[..to_write as usize])?;
+        println!("write delta {}", s);
         written += s;
     }
     Ok(())
@@ -458,6 +461,7 @@ impl PatchWriter {
 
     fn write_extra(&mut self, new: &[u8]) {
         self.extra.write_all(new).unwrap();
+        println!("write extra {}", new.len());
     }
 
     fn write_command(&mut self, cmd: &Command) {
@@ -502,7 +506,6 @@ pub fn generate_full_patch(old: &Index, new: &[u8]) -> Vec<u8> {
 
     let mut it = MatchIter::from(old, new).peekable();
 
-    let default = Default::default();
 
     while let Some(m) = it.next() {
 
@@ -512,14 +515,15 @@ pub fn generate_full_patch(old: &Index, new: &[u8]) -> Vec<u8> {
 
         k += 1;
 
-        let next = it.peek().unwrap_or(&default);
-
         let mm = m.matched;
+        let next_old_offset = it.peek()
+            .map(|m| m.matched.old_offset)
+            .unwrap_or(mm.old_offset + mm.len());
 
         w.write_command(&Command {
             bytewise_add_size: mm.len() as u64,
             extra_append_size: m.unmatched_suffix as u64,
-            oldfile_seek_offset: next.matched.old_offset as i64 - mm.old_offset as i64,
+            oldfile_seek_offset: next_old_offset as i64 - (mm.old_offset + mm.len()) as i64,
         });
 
         w.write_delta(
