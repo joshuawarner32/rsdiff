@@ -4,12 +4,8 @@ use std::ops::Range;
 use std::{mem, str};
 
 use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
-use bzip2::write::BzEncoder;
-// use bzip2::read::BzDecoder;
 use bzip2;
 use sha1::Sha1;
-
-use core::{Command, Header};
 
 pub trait Cache {
     type Read: io::Read;
@@ -22,7 +18,7 @@ pub trait Cache {
 const VERSION: u8 = 5;
 
 pub struct Index {
-    data: Vec<u8>,
+    pub data: Vec<u8>,
     offsets: Vec<usize>,
 }
 
@@ -115,8 +111,6 @@ impl Index {
 
     fn serialize_to<W: Write>(&self, digest: &[u8; 20], mut w: W) -> io::Result<()> {
         w.write_all(digest)?;
-
-        // let mut w = BzEncoder::new(w, bzip2::Compression::Best);
 
         for offset in &self.offsets {
             w.write_u64::<LittleEndian>(*offset as u64)?;
@@ -281,34 +275,34 @@ impl DiffStat {
 }
 
 #[derive(Debug, Default, Eq, PartialEq)]
-struct Delta {
-    old_offset: usize,
-    lower_delta_len: usize,
-    mid_exact_len: usize,
-    upper_delta_len: usize,
+pub struct Delta {
+    pub old_offset: usize,
+    pub lower_delta_len: usize,
+    pub mid_exact_len: usize,
+    pub upper_delta_len: usize,
 }
 
 impl Delta {
-    fn lower_delta_range(&self) -> Range<usize> {
+    pub fn lower_delta_range(&self) -> Range<usize> {
         self.old_offset .. self.old_offset + self.lower_delta_len
     }
 
-    fn upper_delta_range(&self) -> Range<usize> {
+    pub fn upper_delta_range(&self) -> Range<usize> {
         self.old_offset + self.lower_delta_len + self.mid_exact_len .. self.old_offset + self.len()
     }
 
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.lower_delta_len + self.mid_exact_len + self.upper_delta_len
     }
 }
 
 #[derive(Debug, Default, Eq, PartialEq)]
-struct Match {
-    matched: Delta,
-    unmatched_suffix: usize,
+pub struct Match {
+    pub matched: Delta,
+    pub unmatched_suffix: usize,
 }
 
-struct MatchIter<'a> {
+pub struct MatchIter<'a> {
     old: &'a Index,
     new: &'a [u8],
     i: usize,
@@ -386,7 +380,7 @@ impl<'a> Iterator for MatchIter<'a> {
     }
 }
 
-fn write_zeros<W: Write>(mut w: W, count: u64) -> io::Result<()> {
+pub fn write_zeros<W: Write>(mut w: W, count: u64) -> io::Result<()> {
     let buf = [0u8; 1024];
     let mut written = 0;
     while written < count {
@@ -397,7 +391,7 @@ fn write_zeros<W: Write>(mut w: W, count: u64) -> io::Result<()> {
     Ok(())
 }
 
-fn write_delta<W: Write>(mut w: W, old: &[u8], new: &[u8]) -> io::Result<()> {
+pub fn write_delta<W: Write>(mut w: W, old: &[u8], new: &[u8]) -> io::Result<()> {
     assert_eq!(old.len(), new.len());
     let mut buf = [0u8; 1024];
     let mut written = 0;
@@ -412,139 +406,6 @@ fn write_delta<W: Write>(mut w: W, old: &[u8], new: &[u8]) -> io::Result<()> {
         written += s;
     }
     Ok(())
-}
-
-struct PatchWriter {
-    new_file_size: usize,
-    cmds: BzEncoder<Vec<u8>>,
-    delta: BzEncoder<Vec<u8>>,
-    extra: BzEncoder<Vec<u8>>,
-}
-
-impl PatchWriter {
-    fn new(new_file_size: usize) -> PatchWriter {
-        PatchWriter {
-            new_file_size: new_file_size,
-            cmds: BzEncoder::new(Vec::new(), bzip2::Compression::Best),
-            delta: BzEncoder::new(Vec::new(), bzip2::Compression::Best),
-            extra: BzEncoder::new(Vec::new(), bzip2::Compression::Best),
-        }
-    }
-
-    fn finish(self) -> Vec<u8> {
-        let cmds = self.cmds.finish().unwrap();
-        let delta = self.delta.finish().unwrap();
-        let extra = self.extra.finish().unwrap();
-
-        let mut patch = Vec::new();
-
-        Header {
-            compressed_commands_size: cmds.len() as u64,
-            compressed_delta_size: delta.len() as u64,
-            new_file_size: self.new_file_size as u64,
-        }.write_to(&mut patch).unwrap();
-
-        patch.extend(&cmds);
-        patch.extend(&delta);
-        patch.extend(&extra);
-
-        patch
-    }
-
-    fn write_delta_zeros(&mut self, count: usize) {
-        write_zeros(&mut self.delta, count as u64).unwrap();
-    }
-
-    fn write_delta(&mut self, old: &[u8], new: &[u8]) {
-        write_delta(&mut self.delta, old, new).unwrap();
-    }
-
-    fn write_extra(&mut self, new: &[u8]) {
-        self.extra.write_all(new).unwrap();
-        // println!("write extra {}", new.len());
-    }
-
-    fn write_command(&mut self, cmd: &Command) {
-        cmd.write_to(&mut self.cmds).unwrap();
-    }
-}
-
-pub fn generate_identity_patch(size: u64) -> Vec<u8> {
-    let mut w = PatchWriter::new(size as usize);
-
-    w.write_delta_zeros(size as usize);
-
-    w.write_command(&Command {
-        bytewise_add_size: size,
-        extra_append_size: 0,
-        oldfile_seek_offset: 0,
-    });
-
-    w.finish()
-}
-
-pub fn generate_idempotent_patch(desired_output: &[u8]) -> Vec<u8> {
-    let mut w = PatchWriter::new(desired_output.len());
-
-    w.write_extra(desired_output);
-
-    w.write_command(&Command {
-        bytewise_add_size: 0,
-        extra_append_size: desired_output.len() as u64,
-        oldfile_seek_offset: 0,
-    });
-
-    w.finish()
-}
-
-pub fn generate_full_patch(old: &Index, new: &[u8]) -> Vec<u8> {
-    let mut w = PatchWriter::new(new.len());
-
-    let mut i = 0;
-
-    let mut k = 0;
-
-    let mut it = MatchIter::from(old, new).peekable();
-
-
-    while let Some(m) = it.next() {
-
-        if k % 1024 == 0 {
-            println!("{} / {} ({}%)", i, new.len(), i * 100 / new.len());
-        }
-
-        k += 1;
-
-        let mm = m.matched;
-        let next_old_offset = it.peek()
-            .map(|m| m.matched.old_offset)
-            .unwrap_or(mm.old_offset + mm.len());
-
-        w.write_command(&Command {
-            bytewise_add_size: mm.len() as u64,
-            extra_append_size: m.unmatched_suffix as u64,
-            oldfile_seek_offset: next_old_offset as i64 - (mm.old_offset + mm.len()) as i64,
-        });
-
-        w.write_delta(
-            &old.data[mm.lower_delta_range()], 
-            &new[i .. i + mm.lower_delta_len]);
-
-        w.write_delta_zeros(mm.mid_exact_len);
-
-        w.write_delta(
-            &old.data[mm.upper_delta_range()], 
-            &new[i + mm.lower_delta_len + mm.mid_exact_len .. i + mm.len()]);
-
-        let extra_begin = i + mm.len();
-        let extra_end = extra_begin + m.unmatched_suffix;
-
-        w.write_extra(&new[extra_begin .. extra_end]);
-
-        i = extra_end;
-    }
-
-    w.finish()
 }
 
 #[cfg(test)]

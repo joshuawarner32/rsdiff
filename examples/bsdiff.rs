@@ -5,7 +5,8 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write, Cursor};
 use std::{env, fmt};
 
-use rsdiff::diff::{Cache, Index, generate_full_patch};
+use rsdiff::diff::{Cache, Index};
+use rsdiff::format::bsdiff::generate_full_patch;
 
 fn load<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
     let mut contents = Vec::new();

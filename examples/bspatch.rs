@@ -5,7 +5,7 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write, Cursor};
 use std::{env, fmt};
 
-use rsdiff::patch;
+use rsdiff::format::bsdiff;
 
 fn load<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
     let mut contents = Vec::new();
@@ -24,5 +24,5 @@ fn main() {
     let new = File::create(&args[2]).unwrap();
     let patch = load(&args[3]).unwrap();
 
-    patch::apply(&patch, old, new).unwrap();
+    bsdiff::apply_patch(&patch, old, new).unwrap();
 }

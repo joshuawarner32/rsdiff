@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::env;
 
-use rsdiff::Header;
+use rsdiff::format::bsdiff::Header;
 
 fn load<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
     let mut contents = Vec::new();
