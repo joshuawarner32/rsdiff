@@ -176,7 +176,7 @@ pub fn apply<OldRS, NewW>(patch: &[u8], old: OldRS, new: NewW) -> io::Result<()>
     };
 
     for cmd in commands {
-        println!("cmd {:?}", cmd);
+        // println!("cmd {:?}", cmd);
         patcher.apply(&(cmd?))?;
     }
 

@@ -157,7 +157,7 @@ impl Index {
             }
         });
 
-        println!("found [{}] at {:?}", unsafe { str::from_utf8_unchecked(buf) }, res);
+        // println!("found [{}] at {:?}", unsafe { str::from_utf8_unchecked(buf) }, res);
 
         let (start, len) = match res {
             Ok(index) => {
@@ -335,7 +335,7 @@ impl<'a> Iterator for MatchIter<'a> {
         while self.i < self.new.len() {
             let m = self.old.longest_match(&self.new[self.i..]);
 
-            println!("i {} match {:?}", self.i, m);
+            // println!("i {} match {:?}", self.i, m);
 
             if m.len() >= 8 {
                 let pml = partial_match_length(
@@ -392,7 +392,7 @@ fn write_zeros<W: Write>(mut w: W, count: u64) -> io::Result<()> {
     while written < count {
         let s = w.write(&buf[..min(buf.len() as u64, (count - written)) as usize])?;
         written += s as u64;
-        println!("write zero {}", s);
+        // println!("write zero {}", s);
     }
     Ok(())
 }
@@ -408,7 +408,7 @@ fn write_delta<W: Write>(mut w: W, old: &[u8], new: &[u8]) -> io::Result<()> {
         }
 
         let s = w.write(&buf[..to_write as usize])?;
-        println!("write delta {}", s);
+        // println!("write delta {}", s);
         written += s;
     }
     Ok(())
@@ -461,7 +461,7 @@ impl PatchWriter {
 
     fn write_extra(&mut self, new: &[u8]) {
         self.extra.write_all(new).unwrap();
-        println!("write extra {}", new.len());
+        // println!("write extra {}", new.len());
     }
 
     fn write_command(&mut self, cmd: &Command) {

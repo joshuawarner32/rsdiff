@@ -111,18 +111,18 @@ impl<R> Iterator for CommandReader<R>
 
         let mut p = 0;
         while p < buf.len() {
-            println!("loop");
+            // println!("loop");
             match self.inner.read(&mut buf[p..]) {
                 Ok(0) => {
-                    println!("1");
+                    // println!("1");
                     return None
                 }
                 Ok(size) => {
-                    println!("2 => {}", size);
+                    // println!("2 => {}", size);
                     p += size
                 }
                 Err(e) => {
-                    println!("3");
+                    // println!("3");
                     return Some(Err(e))
                 }
             }
@@ -145,12 +145,12 @@ mod tests {
         for test in tests {
             let mut buf = [0u8; 8];
 
-            println!("trying 0x{:x}", test);
+            // println!("trying 0x{:x}", test);
             
             write_offset(&mut buf, *test);
             let result = read_offset(&buf);
 
-            println!("  got 0x{:x}", result);
+            // println!("  got 0x{:x}", result);
 
             assert_eq!(*test, result);
         }
