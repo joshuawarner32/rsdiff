@@ -16,7 +16,8 @@ use diff::{
 };
 
 use patch::{
-    Patcher
+    read_paired_bufs,
+    read_size_from,
 };
 
 #[derive(Debug)]
@@ -207,6 +208,64 @@ impl PatchWriter {
 
     fn write_command(&mut self, cmd: &Command) {
         cmd.write_to(&mut self.cmds).unwrap();
+    }
+}
+
+pub struct Patcher<DeltaR, ExtraR, OldRS, NewW> {
+    delta: DeltaR,
+    extra: ExtraR,
+    old: OldRS,
+    new: NewW,
+}
+
+impl<DeltaR, ExtraR, OldRS, NewW> Patcher<DeltaR, ExtraR, OldRS, NewW>
+    where
+        DeltaR: Read,
+        ExtraR: Read,
+        OldRS: Read+Seek,
+        NewW: Write
+{
+
+    pub fn new(delta: DeltaR, extra: ExtraR, old: OldRS, new: NewW) -> Patcher<DeltaR, ExtraR, OldRS, NewW> {
+        Patcher {
+            delta: delta,
+            extra: extra,
+            old: old,
+            new: new,
+        }
+    }
+
+    pub fn apply(&mut self, c: &Command) -> io::Result<()> {
+        self.append_delta(c.bytewise_add_size)?;
+        self.append_extra(c.extra_append_size)?;
+        self.seek_old(c.oldfile_seek_offset)?;
+        Ok(())
+    }
+
+    pub fn append_delta(&mut self, size: u64) -> io::Result<()> {
+        let new = &mut self.new;
+        read_paired_bufs(size, &mut self.old, &mut self.delta, |o, d| {
+            for i in 0..o.len() {
+                o[i] = o[i].wrapping_add(d[i]);
+            }
+            new.write_all(&o)
+        })
+    }
+
+    pub fn append_extra(&mut self, size: u64) -> io::Result<()> {
+        let new = &mut self.new;
+        read_size_from(size, &mut self.extra, |e| {
+            new.write_all(&e)
+        })
+    }
+
+    pub fn seek_old(&mut self, size: i64) -> io::Result<()> {
+        self.old.seek(io::SeekFrom::Current(size)).map(|_|())
+    }
+
+    pub fn check_written_size(&self, _: u64) -> io::Result<()> {
+        // TODO: return an error if we haven't written the expected size to the output.
+        Ok(())
     }
 }
 
