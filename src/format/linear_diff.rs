@@ -153,54 +153,34 @@ mod tests {
     use super::*;
     use diff::Index;
 
-    fn test_identity_patch() {
-        let buf = b"this is a test";
-        let index = Index::compute(buf.to_vec());
+    fn assert_roundtrip(old: &[u8], new: &[u8]) {
+        let index = Index::compute(old.to_vec());
+
         let mut patch = Vec::new();
-        generate_full_patch(&index, &buf[..], &mut patch).unwrap();
-        
-        let mut new = Vec::new();
-        let mut old = Cursor::new(buf);
-
-        apply_patch(Cursor::new(patch), &mut old, &mut new).unwrap();
-
-        assert_eq!(&buf[..], &new[..]);
-    }
-
-    #[test]
-    fn test_simple_patch() {
-        let buf = b"this is a test";
-        let buf2 = b"this is really a cool test";
-        let index = Index::compute(buf.to_vec());
-        let mut patch = Vec::new();
-        generate_full_patch(&index, &buf2[..], &mut patch).unwrap();
+        generate_full_patch(&index, &new[..], &mut patch).unwrap();
         
         print_patch(Cursor::new(&patch));
         
-        let mut new = Vec::new();
-        let mut old = Cursor::new(buf);
+        let mut computed = Vec::new();
+        apply_patch(Cursor::new(patch), Cursor::new(old), &mut computed).unwrap();
 
-        apply_patch(Cursor::new(patch), &mut old, &mut new).unwrap();
-
-        assert_eq!(&buf2[..], &new[..]);
+        assert_eq!(&new[..], &computed[..]);
     }
 
     #[test]
-    fn test_full_patch() {
-        let buf = b"this is a test 12345678 test";
-        let buf2 = b"this is really a cool uftu 12345678 uftu";
-        let index = Index::compute(buf.to_vec());
-        let mut patch = Vec::new();
-        generate_full_patch(&index, &buf2[..], &mut patch).unwrap();
+    fn test_simple_patches() {
+        let bufs = vec![
+            &b""[..],
+            b"this is a test",
+            b"this is really a cool test",
+            b"this is a test 12345678 test",
+            b"this is really a cool uftu 12345678 uftu",
+        ];
 
-        print_patch(Cursor::new(&patch));
-        
-        let mut new = Vec::new();
-        let mut old = Cursor::new(buf);
-
-        println!("done making patch");
-        apply_patch(Cursor::new(patch), &mut old, &mut new).unwrap();
-
-        assert_eq!(str::from_utf8(buf2).unwrap(), str::from_utf8(&new).unwrap());
+        for old in &bufs {
+            for new in &bufs {
+                assert_roundtrip(old, new);
+            }
+        }
     }
 }
