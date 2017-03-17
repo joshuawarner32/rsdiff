@@ -28,7 +28,7 @@ impl Command {
         let mut buf = [0u8; 8*3];
 
         LittleEndian::write_u64(&mut buf[0..8], self.old_offset);
-        LittleEndian::write_u64(&mut buf[8..26], self.bytewise_add_size);
+        LittleEndian::write_u64(&mut buf[8..16], self.bytewise_add_size);
         LittleEndian::write_u64(&mut buf[16..24], self.extra_append_size);
 
         writer.write_all(&buf)
@@ -50,8 +50,8 @@ impl Command {
         }
 
         let old_offset = LittleEndian::read_u64(&mut buf[0..8]);
-        let bytewise_add_size = LittleEndian::read_u64(&mut buf[0..8]);
-        let extra_append_size = LittleEndian::read_u64(&mut buf[0..8]);
+        let bytewise_add_size = LittleEndian::read_u64(&mut buf[8..16]);
+        let extra_append_size = LittleEndian::read_u64(&mut buf[16..24]);
 
         Ok(Some(Command {
             old_offset: old_offset,
@@ -61,8 +61,8 @@ impl Command {
     }
 }
 
-pub fn generate_full_patch<PatchW: Write>(old: &Index, new: &[u8], patch: PatchW) -> io::Result<()> {
-    let patch = zstd::stream::Encoder::new(patch, 19);
+pub fn generate_full_patch<PatchW: Write>(old: &Index, new: &[u8], mut patch: PatchW) -> io::Result<()> {
+    // let mut patch = zstd::stream::Encoder::new(patch, 19).unwrap();
 
     let mut i = 0;
 
@@ -78,11 +78,15 @@ pub fn generate_full_patch<PatchW: Write>(old: &Index, new: &[u8], patch: PatchW
 
         let mm = m.matched;
 
-        Command {
+        let cmd = Command {
             old_offset: mm.old_offset as u64,
             bytewise_add_size: mm.len() as u64,
             extra_append_size: m.unmatched_suffix as u64,
-        }.write_to(&mut patch)?;
+        };
+
+        println!("write cmd: {:?}", cmd);
+
+        cmd.write_to(&mut patch)?;
 
         write_delta(
             &mut patch,
@@ -97,14 +101,15 @@ pub fn generate_full_patch<PatchW: Write>(old: &Index, new: &[u8], patch: PatchW
         i = extra_end;
     }
 
-    patch.finish();
+    // patch.finish();
 
     Ok(())
 }
 
-
-pub fn apply_patch<PatchR: Read, OldRS: Read+Seek, NewW: Write>(patch: PatchR, old: OldRS, new: NewW) -> io::Result<()> {
-    let patch = zstd::Decoder::new(patch);
+pub fn apply_patch<PatchR: Read, OldRS: Read+Seek, NewW: Write>(mut patch: PatchR, mut old: OldRS, mut new: NewW)
+ -> io::Result<()>
+{
+    // let mut patch = zstd::Decoder::new(patch).unwrap();
 
     while let Some(cmd) = Command::read_from(&mut patch)? {
         old.seek(io::SeekFrom::Start(cmd.old_offset))?;
@@ -122,4 +127,80 @@ pub fn apply_patch<PatchR: Read, OldRS: Read+Seek, NewW: Write>(patch: PatchR, o
     }
 
     Ok(())
+}
+
+pub fn print_patch<PatchR: Read>(mut patch: PatchR)
+ -> io::Result<()>
+{
+    // let mut patch = zstd::Decoder::new(patch).unwrap();
+
+    while let Some(cmd) = Command::read_from(&mut patch)? {
+        println!("read {:?}", cmd);
+
+        read_size_from(cmd.bytewise_add_size, &mut patch, |_| {Ok(())})?;
+        read_size_from(cmd.extra_append_size, &mut patch, |_| {Ok(())})?;
+    }
+
+    Ok(())
+}
+
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+    use std::str;
+
+    use super::*;
+    use diff::Index;
+
+    fn test_identity_patch() {
+        let buf = b"this is a test";
+        let index = Index::compute(buf.to_vec());
+        let mut patch = Vec::new();
+        generate_full_patch(&index, &buf[..], &mut patch).unwrap();
+        
+        let mut new = Vec::new();
+        let mut old = Cursor::new(buf);
+
+        apply_patch(Cursor::new(patch), &mut old, &mut new).unwrap();
+
+        assert_eq!(&buf[..], &new[..]);
+    }
+
+    #[test]
+    fn test_simple_patch() {
+        let buf = b"this is a test";
+        let buf2 = b"this is really a cool test";
+        let index = Index::compute(buf.to_vec());
+        let mut patch = Vec::new();
+        generate_full_patch(&index, &buf2[..], &mut patch).unwrap();
+        
+        print_patch(Cursor::new(&patch));
+        
+        let mut new = Vec::new();
+        let mut old = Cursor::new(buf);
+
+        apply_patch(Cursor::new(patch), &mut old, &mut new).unwrap();
+
+        assert_eq!(&buf2[..], &new[..]);
+    }
+
+    #[test]
+    fn test_full_patch() {
+        let buf = b"this is a test 12345678 test";
+        let buf2 = b"this is really a cool uftu 12345678 uftu";
+        let index = Index::compute(buf.to_vec());
+        let mut patch = Vec::new();
+        generate_full_patch(&index, &buf2[..], &mut patch).unwrap();
+
+        print_patch(Cursor::new(&patch));
+        
+        let mut new = Vec::new();
+        let mut old = Cursor::new(buf);
+
+        println!("done making patch");
+        apply_patch(Cursor::new(patch), &mut old, &mut new).unwrap();
+
+        assert_eq!(str::from_utf8(buf2).unwrap(), str::from_utf8(&new).unwrap());
+    }
 }

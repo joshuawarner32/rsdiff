@@ -89,13 +89,19 @@ pub fn read_size_from<F, R: Read>(mut size: u64, mut r: R, mut f: F) -> io::Resu
         let avail = min(buf.len() as u64, size) as usize;
         if p < avail {
             let s = r.read(&mut buf[p..avail])?;
+            assert!(s <= avail - p);
             p += s;
+        }
+
+        if p == 0 {
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "failed to fill whole buffer"));
         }
 
         f(&mut buf[base..p])?;
 
         base = 0;
         size -= p as u64;
+        p = 0;
     }
 
     Ok(())
